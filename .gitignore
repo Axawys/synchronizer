@@ -1,0 +1,50 @@
+# Private working files, not for the public repository
+ForClaude
+Completed.md
+todo.md
+
+# Dart / Flutter build and tooling output
+.dart_tool/
+.packages
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+**/generated_plugin_registrant.dart
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+
+# Per-package pubspec.lock for application-less packages is kept; app locks are
+# noise across machines, so they are ignored here.
+**/pubspec.lock
+
+# IDE and editor
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+.settings/
+*.swp
+
+# OS clutter
+.DS_Store
+Thumbs.db
+
+# Obsidian workspace config (this folder gets opened as a vault during testing)
+.obsidian/
+
+# Android
+android/android/.gradle/
+android/android/local.properties
+android/android/key.properties
+android/android/**/GeneratedPluginRegistrant.java
+*.keystore
+*.jks
+
+# Linux desktop build
+linux/linux/flutter/ephemeral/
+
+# Symbols and logs
+*.log
+app.*.symbols
+app.*.map.json

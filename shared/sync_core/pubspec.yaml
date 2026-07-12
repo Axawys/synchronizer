@@ -1,0 +1,16 @@
+name: sync_core
+description: Shared synchronization engine for the desktop and mobile applications. Directory scanning, content hashing, manifest diffing and the wire protocol live here.
+version: 0.0.1
+publish_to: none
+
+environment:
+  sdk: ^3.12.0
+
+dependencies:
+  convert: ^3.1.1
+  crypto: ^3.0.3
+  path: ^1.9.0
+
+dev_dependencies:
+  lints: ^5.0.0
+  test: ^1.25.0
