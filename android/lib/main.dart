@@ -1,122 +1,147 @@
 import 'package:flutter/material.dart';
+import 'package:sync_net/sync_net.dart';
 
-void main() {
-  runApp(const MyApp());
+import 'device_identity.dart';
+import 'multicast_lock.dart';
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  final self = await DeviceIdentity.load();
+  runApp(SynchronizerApp(self: self));
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+class SynchronizerApp extends StatelessWidget {
+  const SynchronizerApp({super.key, required this.self});
 
-  // This widget is the root of your application.
+  final DeviceInfo self;
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
+      title: 'Synchronizer',
       theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: .fromSeed(seedColor: Colors.deepPurple),
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal),
+        useMaterial3: true,
       ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      home: DevicesPage(self: self),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
+/// Lists other Synchronizer devices found on the local network. Selecting one
+/// will, in a later stage, start the pairing handshake.
+class DevicesPage extends StatefulWidget {
+  const DevicesPage({super.key, required this.self});
 
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
+  final DeviceInfo self;
 
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  State<DevicesPage> createState() => _DevicesPageState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+class _DevicesPageState extends State<DevicesPage> {
+  late final DiscoveryService _discovery;
+  List<DeviceInfo> _devices = const [];
 
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
+  @override
+  void initState() {
+    super.initState();
+    _discovery = DiscoveryService(widget.self);
+    _discovery.peers.listen((devices) {
+      if (mounted) setState(() => _devices = devices);
     });
+    _startDiscovery();
+  }
+
+  Future<void> _startDiscovery() async {
+    // Must hold the multicast lock before binding, or inbound announcements
+    // from other devices are dropped by the system.
+    await MulticastLock.acquire();
+    await _discovery.start();
+  }
+
+  @override
+  void dispose() {
+    _discovery.stop();
+    MulticastLock.release();
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
     return Scaffold(
       appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
-      ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: .center,
-          children: [
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
+        title: const Text('Devices on this network'),
+        bottom: PreferredSize(
+          preferredSize: const Size.fromHeight(28),
+          child: Padding(
+            padding: const EdgeInsets.only(bottom: 8, left: 16, right: 16),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                'This device: ${widget.self.name}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
             ),
-          ],
+          ),
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
+      body: _devices.isEmpty ? const _Searching() : _DeviceList(devices: _devices),
+    );
+  }
+}
+
+class _Searching extends StatelessWidget {
+  const _Searching();
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: const [
+          SizedBox(
+              width: 28, height: 28, child: CircularProgressIndicator(strokeWidth: 3)),
+          SizedBox(height: 16),
+          Text('Looking for devices...'),
+          SizedBox(height: 4),
+          Text('Open Synchronizer on your desktop, on the same Wi-Fi.'),
+        ],
       ),
     );
   }
+}
+
+class _DeviceList extends StatelessWidget {
+  const _DeviceList({required this.devices});
+
+  final List<DeviceInfo> devices;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView.separated(
+      itemCount: devices.length,
+      separatorBuilder: (_, _) => const Divider(height: 1),
+      itemBuilder: (context, i) {
+        final device = devices[i];
+        return ListTile(
+          leading: Icon(_iconFor(device.platform)),
+          title: Text(device.name),
+          subtitle: Text('${device.address ?? 'unknown'}:${device.port}'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Pairing with ${device.name} is not built yet.')),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  IconData _iconFor(DevicePlatform platform) => switch (platform) {
+        DevicePlatform.android => Icons.smartphone,
+        DevicePlatform.linux => Icons.computer,
+        DevicePlatform.unknown => Icons.devices_other,
+      };
 }

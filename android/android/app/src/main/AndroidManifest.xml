@@ -1,6 +1,13 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Local-network device discovery and the sync transport. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
+    <!-- Required to hold a multicast lock so inbound UDP announcements arrive. -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"/>
+
     <application
-        android:label="synchronizer_mobile"
+        android:label="Synchronizer"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
