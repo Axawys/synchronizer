@@ -17,6 +17,7 @@ export 'src/frame.dart';
 export 'src/pairing.dart';
 export 'src/pull.dart';
 export 'src/push.dart';
+export 'src/reconcile.dart';
 export 'src/server.dart';
 export 'src/session.dart';
 export 'src/trust.dart';

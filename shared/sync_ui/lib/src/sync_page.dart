@@ -9,12 +9,8 @@ import 'package:sync_net/sync_net.dart';
 import 'folder_picker_page.dart';
 import 'storage.dart';
 
-/// Which way a sync moves files. Pull brings the peer's copy down to this
-/// device; push sends this device's copy up to the peer.
-enum SyncDirection { pull, push }
-
 /// Screen for a paired device: connects a session, lists the folders it shares,
-/// and syncs a chosen folder down to this device.
+/// and reconciles a chosen folder in both directions with a three-way merge.
 class SyncPage extends StatefulWidget {
   const SyncPage({
     super.key,
@@ -78,8 +74,7 @@ class _SyncPageState extends State<SyncPage> {
   }
 
   /// Resolves where [name] lives locally, asking the user to pick the folder
-  /// the first time. The chosen folder is the sync target itself: files land
-  /// directly in it, so the user picks (or makes) the folder they want.
+  /// the first time. The chosen folder is the sync target itself.
   Future<String?> _resolveTarget(String name) async {
     final existing = await SyncTargets.localPath(widget.device.id, name);
     if (existing != null) return existing;
@@ -115,7 +110,7 @@ class _SyncPageState extends State<SyncPage> {
     return status.isGranted;
   }
 
-  Future<void> _sync(String name, SyncDirection direction) async {
+  Future<void> _sync(String name) async {
     final client = _client;
     if (client == null) return;
 
@@ -123,89 +118,71 @@ class _SyncPageState extends State<SyncPage> {
     if (localPath == null || !mounted) return;
     final root = Directory(localPath);
 
-    final ChangeSet plan;
+    final base = await BaseManifests.load(widget.device.id, name);
+    final MergeResult merge;
     try {
-      plan = direction == SyncDirection.pull
-          ? await planPull(client, name, root)
-          : await planPush(client, name, root);
+      merge = await computeMerge(client, name, root, base);
     } catch (e) {
       _toast('Could not read changes: $e');
       return;
     }
 
-    if (plan.isEmpty) {
-      _toast('"$name" is already up to date.');
+    if (merge.isEmpty) {
+      _toast('"$name" is already in sync.');
       return;
     }
 
-    final light = await SyncSettings.lightMode();
-    if (!light) {
+    final List<ResolvedMerge> resolved;
+    if (await SyncSettings.lightMode()) {
+      // No one to ask: resolve conflicts by taking the more recently edited side.
+      resolved = [
+        for (final item in merge.items)
+          item.kind == MergeKind.conflict
+              ? ResolvedMerge(item, toLocal: conflictResolvesToLocal(item))
+              : ResolvedMerge.natural(item),
+      ];
+    } else {
       if (!mounted) return;
-      final confirmed = await showDialog<bool>(
+      final choice = await showDialog<List<ResolvedMerge>>(
         context: context,
-        builder: (context) =>
-            _DiffDialog(name: name, plan: plan, direction: direction),
+        builder: (context) => _MergeDialog(
+          name: name,
+          merge: merge,
+          deviceName: widget.device.name,
+        ),
       );
-      if (confirmed != true) return;
+      if (choice == null) return; // cancelled
+      resolved = choice;
     }
 
-    await _apply(client, name, root, plan, direction);
+    await _apply(client, name, root, resolved);
   }
 
   Future<void> _apply(SyncClient client, String name, Directory root,
-      ChangeSet plan, SyncDirection direction) async {
+      List<ResolvedMerge> resolved) async {
     final progress = ValueNotifier<int>(0);
     if (mounted) {
       showDialog<void>(
         context: context,
         barrierDismissible: false,
-        builder: (context) => _ApplyingDialog(total: plan.length, applied: progress),
+        builder: (context) =>
+            _ApplyingDialog(total: resolved.length, applied: progress),
       );
     }
     try {
-      if (direction == SyncDirection.pull) {
-        await applyPull(client, name, root, plan,
-            onProgress: (applied, _) => progress.value = applied);
-      } else {
-        await applyPush(client, name, root, plan,
-            onProgress: (applied, _) => progress.value = applied);
-      }
+      await applyMerge(client, name, root, resolved,
+          onProgress: (applied, _) => progress.value = applied);
+      // Both sides now match; record it as the base for next time.
+      await BaseManifests.save(
+          widget.device.id, name, await Manifest.scan(root));
       if (mounted) Navigator.of(context).pop(); // close applying dialog
-      final verb = direction == SyncDirection.pull ? 'Downloaded' : 'Uploaded';
-      _toast('$verb ${plan.length} change(s) for "$name".');
+      _toast('Synced ${resolved.length} change(s) for "$name".');
     } catch (e) {
       if (mounted) Navigator.of(context).pop();
       _toast('Sync failed: $e');
     } finally {
       progress.dispose();
     }
-  }
-
-  // Lets the user choose whether to pull the folder down or push it up.
-  Future<void> _chooseDirection(String name) async {
-    final direction = await showModalBottomSheet<SyncDirection>(
-      context: context,
-      builder: (context) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.download),
-              title: Text('Get "$name" from ${widget.device.name}'),
-              subtitle: const Text('Apply their changes to this device'),
-              onTap: () => Navigator.pop(context, SyncDirection.pull),
-            ),
-            ListTile(
-              leading: const Icon(Icons.upload),
-              title: Text('Send "$name" to ${widget.device.name}'),
-              subtitle: const Text('Apply this device\'s changes to theirs'),
-              onTap: () => Navigator.pop(context, SyncDirection.push),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (direction != null) await _sync(name, direction);
   }
 
   void _toast(String message) {
@@ -253,81 +230,147 @@ class _SyncPageState extends State<SyncPage> {
           leading: const Icon(Icons.folder_shared),
           title: Text(dir.name),
           trailing: const Icon(Icons.sync),
-          onTap: () => _chooseDirection(dir.name),
+          onTap: () => _sync(dir.name),
         );
       },
     );
   }
 }
 
-/// Shows what a sync would change, for confirmation before anything is written.
-class _DiffDialog extends StatelessWidget {
-  const _DiffDialog({
+/// Shows a reconciliation before it runs: files to download, files to upload,
+/// and any conflicts, each with a per-file choice of which side wins.
+class _MergeDialog extends StatefulWidget {
+  const _MergeDialog({
     required this.name,
-    required this.plan,
-    required this.direction,
+    required this.merge,
+    required this.deviceName,
   });
 
   final String name;
-  final ChangeSet plan;
-  final SyncDirection direction;
+  final MergeResult merge;
+  final String deviceName;
+
+  @override
+  State<_MergeDialog> createState() => _MergeDialogState();
+}
+
+class _MergeDialogState extends State<_MergeDialog> {
+  // For each conflicting path, true = keep this device's version. Defaults to
+  // the opposite of the automatic "take the newer side" choice.
+  late final Map<String, bool> _keepLocal = {
+    for (final item in widget.merge.conflicts)
+      item.path: !conflictResolvesToLocal(item),
+  };
+
+  List<ResolvedMerge> _resolve() {
+    return [
+      for (final item in widget.merge.items)
+        if (item.kind == MergeKind.conflict)
+          ResolvedMerge(item, toLocal: !_keepLocal[item.path]!)
+        else
+          ResolvedMerge.natural(item),
+    ];
+  }
 
   @override
   Widget build(BuildContext context) {
-    final where =
-        direction == SyncDirection.pull ? 'here' : 'on the other device';
+    final merge = widget.merge;
     return AlertDialog(
-      title: Text('Changes to "$name" $where'),
+      title: Text('Sync "${widget.name}"'),
       content: SizedBox(
         width: double.maxFinite,
         child: ListView(
           shrinkWrap: true,
           children: [
-            _section(context, 'New', Icons.add, Colors.green, plan.added),
-            _section(context, 'Updated', Icons.edit, Colors.orange, plan.modified),
-            _section(context, 'Removed', Icons.remove, Colors.red, plan.deleted),
+            if (merge.conflicts.isNotEmpty) ...[
+              _heading(context, 'Conflicts', Icons.warning, Colors.red),
+              const Padding(
+                padding: EdgeInsets.only(left: 26, bottom: 4),
+                child: Text('Changed on both sides. Choose which to keep:',
+                    style: TextStyle(fontStyle: FontStyle.italic)),
+              ),
+              for (final item in merge.conflicts) _conflictRow(item),
+            ],
+            _fileList(context, 'Download from ${widget.deviceName}',
+                Icons.download, Colors.blue, merge.pulls),
+            _fileList(context, 'Upload to ${widget.deviceName}', Icons.upload,
+                Colors.teal, merge.pushes),
           ],
         ),
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.pop(context, false),
+          onPressed: () => Navigator.pop(context),
           child: const Text('Cancel'),
         ),
         FilledButton(
-          onPressed: () => Navigator.pop(context, true),
-          child: Text('Apply ${plan.length}'),
+          onPressed: () => Navigator.pop(context, _resolve()),
+          child: Text('Sync ${merge.length}'),
         ),
       ],
     );
   }
 
-  Widget _section(BuildContext context, String label, IconData icon,
-      Color color, Iterable<Change> changes) {
-    final list = changes.toList();
+  Widget _conflictRow(MergeItem item) {
+    return Padding(
+      padding: const EdgeInsets.only(left: 26, top: 4, bottom: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(item.path, style: Theme.of(context).textTheme.bodyMedium),
+          const SizedBox(height: 4),
+          SegmentedButton<bool>(
+            style: const ButtonStyle(visualDensity: VisualDensity.compact),
+            segments: const [
+              ButtonSegment(value: true, label: Text('Keep mine')),
+              ButtonSegment(value: false, label: Text('Take theirs')),
+            ],
+            selected: {_keepLocal[item.path]!},
+            onSelectionChanged: (s) =>
+                setState(() => _keepLocal[item.path] = s.first),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _heading(BuildContext context, String label, IconData icon, Color c) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Row(
+        children: [
+          Icon(icon, size: 18, color: c),
+          const SizedBox(width: 8),
+          Text(label, style: Theme.of(context).textTheme.titleSmall),
+        ],
+      ),
+    );
+  }
+
+  Widget _fileList(BuildContext context, String label, IconData icon,
+      Color color, Iterable<MergeItem> items) {
+    final list = items.toList();
     if (list.isEmpty) return const SizedBox.shrink();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          child: Row(
-            children: [
-              Icon(icon, size: 18, color: color),
-              const SizedBox(width: 8),
-              Text('$label (${list.length})',
-                  style: Theme.of(context).textTheme.titleSmall),
-            ],
-          ),
-        ),
-        for (final change in list)
+        _heading(context, '$label (${list.length})', icon, color),
+        for (final item in list)
           Padding(
             padding: const EdgeInsets.only(left: 26, bottom: 2),
-            child: Text(change.path,
+            child: Text(_describe(item),
                 style: Theme.of(context).textTheme.bodySmall),
           ),
       ],
     );
+  }
+
+  // Marks deletions so the user is not surprised by a removal.
+  String _describe(MergeItem item) {
+    final gone = item.kind == MergeKind.pullToLocal
+        ? item.remote == null
+        : item.local == null;
+    return gone ? '${item.path}  (delete)' : item.path;
   }
 }
 
@@ -340,7 +383,7 @@ class _ApplyingDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Applying changes'),
+      title: const Text('Syncing'),
       content: ValueListenableBuilder<int>(
         valueListenable: applied,
         builder: (context, value, _) {
