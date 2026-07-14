@@ -1,0 +1,42 @@
+import 'dart:io';
+
+import 'package:path/path.dart' as p;
+
+import 'diff.dart';
+
+/// Applies a [ChangeSet] to [root] on disk, bringing this copy in line with the
+/// side the changes came from.
+///
+/// For an added or modified file the bytes are pulled through [fetchBody]
+/// (which the caller wires to the network, or to anything in tests) and written
+/// atomically: into a temporary file first, then renamed over the target, so an
+/// interrupted transfer never leaves a half-written file in the vault. Deleted
+/// files are removed. Parent directories are created as needed.
+///
+/// [onProgress] is called after each change is applied, with the running count,
+/// so the UI can show progress.
+Future<void> applyChanges(
+  Directory root,
+  ChangeSet changes,
+  Future<List<int>> Function(String path) fetchBody, {
+  void Function(int applied, int total)? onProgress,
+}) async {
+  var applied = 0;
+  for (final change in changes.changes) {
+    final target = File(p.joinAll([root.path, ...p.posix.split(change.path)]));
+
+    switch (change.kind) {
+      case ChangeKind.added:
+      case ChangeKind.modified:
+        final bytes = await fetchBody(change.path);
+        await target.parent.create(recursive: true);
+        final temp = File('${target.path}.synctmp');
+        await temp.writeAsBytes(bytes, flush: true);
+        await temp.rename(target.path);
+      case ChangeKind.deleted:
+        if (target.existsSync()) await target.delete();
+    }
+
+    onProgress?.call(++applied, changes.length);
+  }
+}

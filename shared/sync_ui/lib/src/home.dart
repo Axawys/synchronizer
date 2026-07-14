@@ -3,6 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:sync_net/sync_net.dart';
 
 import 'prefs_trust_store.dart';
+import 'shared_folders_page.dart';
+import 'storage.dart';
+import 'sync_page.dart';
 
 /// Root widget for both apps. The only per-platform difference is
 /// [prepareNetwork]: Android passes a hook that grabs the multicast lock before
@@ -30,6 +33,15 @@ class SynchronizerApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal),
         useMaterial3: true,
       ),
+      darkTheme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: Colors.teal,
+          brightness: Brightness.dark,
+        ),
+        useMaterial3: true,
+      ),
+      // Follow the system light/dark setting automatically.
+      themeMode: ThemeMode.system,
       home: DevicesPage(
         self: self,
         prepareNetwork: prepareNetwork,
@@ -60,6 +72,7 @@ class DevicesPage extends StatefulWidget {
 
 class _DevicesPageState extends State<DevicesPage> {
   final TrustStore _trust = PrefsTrustStore();
+  final SharedFolders _sharedFolders = SharedFolders();
   late final DiscoveryService _discovery;
   late final PeerServer _pairingServer;
 
@@ -71,12 +84,18 @@ class _DevicesPageState extends State<DevicesPage> {
   void initState() {
     super.initState();
     _discovery = DiscoveryService(widget.self);
-    _pairingServer = PeerServer(widget.self, _trust, port: widget.self.port);
+    _pairingServer = PeerServer(
+      widget.self,
+      _trust,
+      port: widget.self.port,
+      directories: _sharedFolders,
+    );
     if (widget.autoStart) _init();
   }
 
   Future<void> _init() async {
     await _refreshTrusted();
+    await _sharedFolders.load();
     await widget.prepareNetwork?.call();
     _discovery.peers.listen((devices) {
       if (mounted) setState(() => _devices = devices);
@@ -95,6 +114,7 @@ class _DevicesPageState extends State<DevicesPage> {
   void dispose() {
     _discovery.stop();
     _pairingServer.stop();
+    _sharedFolders.dispose();
     super.dispose();
   }
 
@@ -112,6 +132,34 @@ class _DevicesPageState extends State<DevicesPage> {
     } else {
       await request.reject();
     }
+  }
+
+  // Tapping a device: open the sync screen if already paired, otherwise pair.
+  Future<void> _openDevice(DeviceInfo device) async {
+    if (device.address == null) return;
+    final trusted = await _trust.get(device.id);
+    if (trusted == null) {
+      await _startPairing(device);
+      return;
+    }
+    if (!mounted) return;
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => SyncPage(
+        self: widget.self,
+        trusted: trusted,
+        device: device,
+      ),
+    ));
+  }
+
+  void _openSharedFolders() {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => SharedFoldersPage(folders: _sharedFolders),
+    ));
+  }
+
+  void _openSettings() {
+    showDialog<void>(context: context, builder: (_) => const _SettingsDialog());
   }
 
   // We are asking another device to pair.
@@ -151,6 +199,18 @@ class _DevicesPageState extends State<DevicesPage> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Devices on this network'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.folder_shared),
+            tooltip: 'Shared folders',
+            onPressed: _openSharedFolders,
+          ),
+          IconButton(
+            icon: const Icon(Icons.settings),
+            tooltip: 'Settings',
+            onPressed: _openSettings,
+          ),
+        ],
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(28),
           child: Padding(
@@ -180,7 +240,7 @@ class _DevicesPageState extends State<DevicesPage> {
                   trailing: paired
                       ? const Icon(Icons.link, color: Colors.teal)
                       : const Icon(Icons.chevron_right),
-                  onTap: () => _startPairing(device),
+                  onTap: () => _openDevice(device),
                 );
               },
             ),
@@ -193,6 +253,54 @@ IconData _iconFor(DevicePlatform platform) => switch (platform) {
       DevicePlatform.linux => Icons.computer,
       DevicePlatform.unknown => Icons.devices_other,
     };
+
+/// Small settings sheet. The theme follows the system automatically, so the
+/// only choice here is how changes are applied.
+class _SettingsDialog extends StatefulWidget {
+  const _SettingsDialog();
+
+  @override
+  State<_SettingsDialog> createState() => _SettingsDialogState();
+}
+
+class _SettingsDialogState extends State<_SettingsDialog> {
+  bool? _light;
+
+  @override
+  void initState() {
+    super.initState();
+    SyncSettings.lightMode().then((value) {
+      if (mounted) setState(() => _light = value);
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Settings'),
+      content: _light == null
+          ? const SizedBox(
+              height: 48, child: Center(child: CircularProgressIndicator()))
+          : SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Plain sync'),
+              subtitle: const Text(
+                  'Apply changes without showing the diff for confirmation.'),
+              value: _light!,
+              onChanged: (value) {
+                setState(() => _light = value);
+                SyncSettings.setLightMode(value);
+              },
+            ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Close'),
+        ),
+      ],
+    );
+  }
+}
 
 class _Searching extends StatelessWidget {
   const _Searching();

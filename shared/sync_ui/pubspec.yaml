@@ -10,6 +10,9 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  file_selector: ^1.0.3
+  path: ^1.9.0
+  path_provider: ^2.1.4
   shared_preferences: ^2.3.0
   sync_net:
     path: ../sync_net
