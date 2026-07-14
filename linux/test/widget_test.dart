@@ -1,7 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sync_net/sync_net.dart';
-
-import 'package:synchronizer_desktop/main.dart';
+import 'package:sync_ui/sync_ui.dart';
 
 void main() {
   testWidgets('shows this device name and searches when no peers found',
@@ -13,7 +12,9 @@ void main() {
       port: 47800,
     );
 
-    await tester.pumpWidget(const SynchronizerApp(self: self));
+    await tester.pumpWidget(
+      const SynchronizerApp(self: self, autoStart: false),
+    );
     await tester.pump();
 
     expect(find.text('This device: test-desktop'), findsOneWidget);

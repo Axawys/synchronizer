@@ -1,9 +1,13 @@
 /// Networking layer shared by the desktop and mobile applications.
 ///
-/// For now this is local-network peer discovery: announcing this device and
-/// finding others over UDP multicast. The pairing handshake and the sync
-/// transport will be added alongside it.
+/// Local-network peer discovery over UDP multicast, and a framed TCP transport
+/// with a pairing handshake on top of it. The sync session (manifest exchange,
+/// file transfer) is layered on the same transport next.
 library;
 
+export 'src/connection.dart';
 export 'src/device_info.dart';
 export 'src/discovery.dart';
+export 'src/frame.dart';
+export 'src/pairing.dart';
+export 'src/trust.dart';

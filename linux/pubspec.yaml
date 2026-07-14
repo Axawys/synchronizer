@@ -43,6 +43,10 @@ dependencies:
   sync_net:
     path: ../shared/sync_net
 
+  # Shared Flutter UI: device list and pairing flow.
+  sync_ui:
+    path: ../shared/sync_ui
+
   # Persists this device's identity (id and name) between runs.
   shared_preferences: ^2.3.0
 
