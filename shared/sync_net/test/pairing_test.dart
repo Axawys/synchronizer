@@ -33,14 +33,14 @@ void main() {
   });
 
   group('handshake over loopback', () {
-    late PairingServer server;
+    late PeerServer server;
     late TrustStore serverTrust;
     late TrustStore clientTrust;
 
     setUp(() async {
       serverTrust = MemoryTrustStore();
       clientTrust = MemoryTrustStore();
-      server = PairingServer(phone, serverTrust, port: 0);
+      server = PeerServer(phone, serverTrust, port: 0);
       await server.start();
     });
 
@@ -48,7 +48,7 @@ void main() {
 
     test('accepted pairing trusts each other with a matching secret', () async {
       String? serverCode;
-      server.requests.listen((req) {
+      server.pairingRequests.listen((req) {
         serverCode = req.code;
         req.accept();
       });
@@ -77,7 +77,7 @@ void main() {
     });
 
     test('rejected pairing trusts no one', () async {
-      server.requests.listen((req) => req.reject());
+      server.pairingRequests.listen((req) => req.reject());
 
       final client = PairingClient(desktop, clientTrust);
       final result = await client.pair('127.0.0.1', server.boundPort);

@@ -8,6 +8,9 @@ environment:
 
 dependencies:
   crypto: ^3.0.3
+  path: ^1.9.0
+  sync_core:
+    path: ../sync_core
 
 dev_dependencies:
   lints: ^5.0.0

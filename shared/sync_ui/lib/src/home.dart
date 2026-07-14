@@ -61,7 +61,7 @@ class DevicesPage extends StatefulWidget {
 class _DevicesPageState extends State<DevicesPage> {
   final TrustStore _trust = PrefsTrustStore();
   late final DiscoveryService _discovery;
-  late final PairingServer _pairingServer;
+  late final PeerServer _pairingServer;
 
   List<DeviceInfo> _devices = const [];
   Set<String> _trustedIds = {};
@@ -71,7 +71,7 @@ class _DevicesPageState extends State<DevicesPage> {
   void initState() {
     super.initState();
     _discovery = DiscoveryService(widget.self);
-    _pairingServer = PairingServer(widget.self, _trust, port: widget.self.port);
+    _pairingServer = PeerServer(widget.self, _trust, port: widget.self.port);
     if (widget.autoStart) _init();
   }
 
@@ -82,7 +82,7 @@ class _DevicesPageState extends State<DevicesPage> {
       if (mounted) setState(() => _devices = devices);
     });
     await _discovery.start();
-    _pairingServer.requests.listen(_onIncomingRequest);
+    _pairingServer.pairingRequests.listen(_onIncomingRequest);
     await _pairingServer.start();
   }
 

@@ -136,83 +136,49 @@ class PairingClient {
   }
 }
 
-/// Phone side: listens for pairing attempts and surfaces each as an
-/// [IncomingPairing] the UI resolves by calling accept or reject.
-class PairingServer {
-  PairingServer(this.self, this.trust, {this.port = 47800});
+/// Server side of the handshake for one connection whose first frame is a
+/// [PairType.request]. Sends the challenge and hands an [IncomingPairing] to
+/// [emit]; the connection stays open until the user accepts or rejects.
+///
+/// This is driven by [PeerServer], which owns the listening socket and routes
+/// each connection to pairing or to a sync session based on its first frame.
+Future<void> handlePairingRequest(
+  PeerConnection conn,
+  StreamIterator<Frame> frames,
+  Frame request, {
+  required DeviceInfo self,
+  required TrustStore trust,
+  required void Function(IncomingPairing) emit,
+}) async {
+  final peer = _readDevice(request.header, conn.remoteAddress);
+  final clientNonce = request.header['nonce']! as String;
+  final serverNonce = generateNonce();
+  final code = pairingCode(clientNonce, serverNonce);
 
-  final DeviceInfo self;
-  final TrustStore trust;
-  final int port;
+  conn.send({
+    'type': PairType.challenge,
+    'device': self.toAnnouncement(),
+    'nonce': serverNonce,
+  });
 
-  ServerSocket? _server;
-  final _requests = StreamController<IncomingPairing>.broadcast();
-
-  Stream<IncomingPairing> get requests => _requests.stream;
-
-  /// The port actually bound. Differs from [port] only when 0 was requested to
-  /// get an ephemeral port (used in tests).
-  int get boundPort => _server?.port ?? port;
-
-  Future<void> start() async {
-    _server = await ServerSocket.bind(InternetAddress.anyIPv4, port);
-    _server!.listen(_onSocket);
-  }
-
-  Future<void> _onSocket(Socket socket) async {
-    final conn = PeerConnection(socket);
-    final frames = StreamIterator(conn.frames);
-    try {
-      if (!await frames.moveNext()) {
-        await conn.close();
-        return;
-      }
-      final request = frames.current;
-      if (request.type != PairType.request) {
-        await conn.close();
-        return;
-      }
-
-      final peer = _readDevice(request.header, conn.remoteAddress);
-      final clientNonce = request.header['nonce']! as String;
-      final serverNonce = generateNonce();
-      final code = pairingCode(clientNonce, serverNonce);
-
-      conn.send({
-        'type': PairType.challenge,
-        'device': self.toAnnouncement(),
-        'nonce': serverNonce,
-      });
-
-      var decided = false;
-      Future<void> decide(bool accepted) async {
-        if (decided) return;
-        decided = true;
-        conn.send({'type': PairType.result, 'accepted': accepted});
-        if (accepted) {
-          await trust.add(TrustedPeer(
-            id: peer.id,
-            name: peer.name,
-            platform: peer.platform,
-            secret: pairingSecret(clientNonce, serverNonce),
-          ));
-        }
-        await frames.cancel();
-        await conn.close();
-      }
-
-      _requests.add(IncomingPairing._(peer, code, decide));
-    } catch (_) {
-      await frames.cancel();
-      await conn.close();
+  var decided = false;
+  Future<void> decide(bool accepted) async {
+    if (decided) return;
+    decided = true;
+    conn.send({'type': PairType.result, 'accepted': accepted});
+    if (accepted) {
+      await trust.add(TrustedPeer(
+        id: peer.id,
+        name: peer.name,
+        platform: peer.platform,
+        secret: pairingSecret(clientNonce, serverNonce),
+      ));
     }
+    await frames.cancel();
+    await conn.close();
   }
 
-  Future<void> stop() async {
-    await _server?.close();
-    _server = null;
-    if (!_requests.isClosed) await _requests.close();
-  }
+  emit(IncomingPairing._(peer, code, decide));
 }
 
 /// A pending request from another device, waiting on the user's decision.
