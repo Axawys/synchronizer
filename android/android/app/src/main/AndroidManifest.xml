@@ -6,6 +6,16 @@
     <!-- Required to hold a multicast lock so inbound UDP announcements arrive. -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"/>
 
+    <!-- All-files access, so synced folders can live in normal storage (e.g.
+         Documents) where other apps like Obsidian can open them. Personal
+         build: this is not accepted for Google Play distribution. -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>
+    <!-- Legacy storage permissions for Android 10 and below. -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29"/>
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="29"/>
+
     <application
         android:label="Synchronizer"
         android:name="${applicationName}"

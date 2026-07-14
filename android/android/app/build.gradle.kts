@@ -6,7 +6,8 @@ plugins {
 
 android {
     namespace = "com.axawys.synchronizer.synchronizer_mobile"
-    compileSdk = flutter.compileSdkVersion
+    // file_picker's transitive deps require compiling against SDK 36.
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {

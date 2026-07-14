@@ -3,10 +3,10 @@ import 'dart:io';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
-import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:sync_net/sync_net.dart';
 
+import 'folder_picker_page.dart';
 import 'storage.dart';
 
 /// Screen for a paired device: connects a session, lists the folders it shares,
@@ -73,26 +73,42 @@ class _SyncPageState extends State<SyncPage> {
     super.dispose();
   }
 
-  /// Resolves where [name] lives locally, asking the user the first time.
+  /// Resolves where [name] lives locally, asking the user to pick the folder
+  /// the first time. The chosen folder is the sync target itself: files land
+  /// directly in it, so the user picks (or makes) the folder they want.
   Future<String?> _resolveTarget(String name) async {
     final existing = await SyncTargets.localPath(widget.device.id, name);
     if (existing != null) return existing;
 
-    String target;
-    if (Platform.isAndroid || Platform.isIOS) {
-      // No folder picker on mobile yet: keep it under the app's documents.
-      final base = await getApplicationDocumentsDirectory();
-      target = p.join(base.path, 'Synchronizer', name);
-    } else {
-      final parent = await getDirectoryPath(
-        confirmButtonText: 'Save "$name" here',
+    String? picked;
+    if (Platform.isAndroid) {
+      if (!await _ensureStoragePermission()) {
+        _toast('All-files access is needed to choose a destination folder.');
+        return null;
+      }
+      if (!mounted) return null;
+      picked = await Navigator.of(context).push<String>(
+        MaterialPageRoute(
+          builder: (_) => const FolderPickerPage(rootPath: '/storage/emulated/0'),
+        ),
       );
-      if (parent == null) return null;
-      target = p.join(parent, name);
+    } else {
+      picked = await getDirectoryPath(
+        confirmButtonText: 'Sync "$name" into this folder',
+      );
     }
+    if (picked == null) return null;
 
-    await SyncTargets.setLocalPath(widget.device.id, name, target);
-    return target;
+    await SyncTargets.setLocalPath(widget.device.id, name, picked);
+    return picked;
+  }
+
+  /// Ensures all-files access on Android, sending the user to the system
+  /// setting to grant it if needed, so writes into normal storage succeed.
+  Future<bool> _ensureStoragePermission() async {
+    if (await Permission.manageExternalStorage.isGranted) return true;
+    final status = await Permission.manageExternalStorage.request();
+    return status.isGranted;
   }
 
   Future<void> _sync(String name) async {
