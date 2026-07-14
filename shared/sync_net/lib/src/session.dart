@@ -27,6 +27,12 @@ abstract final class SessionType {
   static const manifest = 'manifest';
   static const getFile = 'file.get';
   static const file = 'file';
+
+  // Push (writing into the peer's shared directory).
+  static const putFile = 'file.put';
+  static const deleteFile = 'file.delete';
+  static const ack = 'ok';
+
   static const error = 'error';
 }
 
@@ -167,6 +173,29 @@ class SyncClient {
     return reply.body;
   }
 
+  /// Writes [bytes] to [path] inside the peer's shared directory [name],
+  /// creating or overwriting it. Waits for the peer to acknowledge the write.
+  Future<void> putFile(String name, String path, List<int> bytes) async {
+    _conn.send({'type': SessionType.putFile, 'name': name, 'path': path}, bytes);
+    await _expectAck('file put');
+  }
+
+  /// Deletes [path] inside the peer's shared directory [name].
+  Future<void> deleteFile(String name, String path) async {
+    _conn.send({'type': SessionType.deleteFile, 'name': name, 'path': path});
+    await _expectAck('file delete');
+  }
+
+  Future<void> _expectAck(String what) async {
+    final reply = await _next(_frames);
+    if (reply.type == SessionType.error) {
+      throw SessionException(reply.header['message']?.toString() ?? 'error');
+    }
+    if (reply.type != SessionType.ack) {
+      throw SessionException('unexpected reply to $what');
+    }
+  }
+
   Future<void> close() async {
     await _frames.cancel();
     await _conn.close();
@@ -226,6 +255,10 @@ Future<void> handleSession(
         await _serveManifest(conn, directories, request);
       case SessionType.getFile:
         await _serveFile(conn, directories, request);
+      case SessionType.putFile:
+        await _servePut(conn, directories, request);
+      case SessionType.deleteFile:
+        await _serveDelete(conn, directories, request);
       default:
         conn.send({'type': SessionType.error, 'message': 'unknown request'});
     }
@@ -274,6 +307,56 @@ Future<void> _serveFile(
     {'type': SessionType.file, 'path': rel},
     await file.readAsBytes(),
   );
+}
+
+Future<void> _servePut(
+  PeerConnection conn,
+  DirectorySource directories,
+  Frame request,
+) async {
+  final root = directories.pathOf(request.header['name']?.toString() ?? '');
+  final rel = request.header['path']?.toString() ?? '';
+  if (root == null) {
+    conn.send({'type': SessionType.error, 'message': 'no such directory'});
+    return;
+  }
+  final resolved = _resolveWithin(root, rel);
+  if (resolved == null) {
+    conn.send({'type': SessionType.error, 'message': 'invalid path'});
+    return;
+  }
+
+  // Same atomic write as applyChanges: temp file then rename, so an interrupted
+  // push never leaves a half-written file in the peer's vault.
+  final target = File(resolved);
+  await target.parent.create(recursive: true);
+  final temp = File('$resolved.synctmp');
+  await temp.writeAsBytes(request.body, flush: true);
+  await temp.rename(resolved);
+
+  conn.send({'type': SessionType.ack, 'path': rel});
+}
+
+Future<void> _serveDelete(
+  PeerConnection conn,
+  DirectorySource directories,
+  Frame request,
+) async {
+  final root = directories.pathOf(request.header['name']?.toString() ?? '');
+  final rel = request.header['path']?.toString() ?? '';
+  if (root == null) {
+    conn.send({'type': SessionType.error, 'message': 'no such directory'});
+    return;
+  }
+  final resolved = _resolveWithin(root, rel);
+  if (resolved == null) {
+    conn.send({'type': SessionType.error, 'message': 'invalid path'});
+    return;
+  }
+
+  final file = File(resolved);
+  if (file.existsSync()) await file.delete();
+  conn.send({'type': SessionType.ack, 'path': rel});
 }
 
 /// Joins [rel] onto [root], refusing anything that escapes [root] (a `..` or an

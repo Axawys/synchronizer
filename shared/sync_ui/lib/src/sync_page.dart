@@ -9,6 +9,10 @@ import 'package:sync_net/sync_net.dart';
 import 'folder_picker_page.dart';
 import 'storage.dart';
 
+/// Which way a sync moves files. Pull brings the peer's copy down to this
+/// device; push sends this device's copy up to the peer.
+enum SyncDirection { pull, push }
+
 /// Screen for a paired device: connects a session, lists the folders it shares,
 /// and syncs a chosen folder down to this device.
 class SyncPage extends StatefulWidget {
@@ -111,16 +115,19 @@ class _SyncPageState extends State<SyncPage> {
     return status.isGranted;
   }
 
-  Future<void> _sync(String name) async {
+  Future<void> _sync(String name, SyncDirection direction) async {
     final client = _client;
     if (client == null) return;
 
     final localPath = await _resolveTarget(name);
     if (localPath == null || !mounted) return;
+    final root = Directory(localPath);
 
     final ChangeSet plan;
     try {
-      plan = await planPull(client, name, Directory(localPath));
+      plan = direction == SyncDirection.pull
+          ? await planPull(client, name, root)
+          : await planPush(client, name, root);
     } catch (e) {
       _toast('Could not read changes: $e');
       return;
@@ -136,16 +143,17 @@ class _SyncPageState extends State<SyncPage> {
       if (!mounted) return;
       final confirmed = await showDialog<bool>(
         context: context,
-        builder: (context) => _DiffDialog(name: name, plan: plan),
+        builder: (context) =>
+            _DiffDialog(name: name, plan: plan, direction: direction),
       );
       if (confirmed != true) return;
     }
 
-    await _apply(client, name, localPath, plan);
+    await _apply(client, name, root, plan, direction);
   }
 
-  Future<void> _apply(
-      SyncClient client, String name, String localPath, ChangeSet plan) async {
+  Future<void> _apply(SyncClient client, String name, Directory root,
+      ChangeSet plan, SyncDirection direction) async {
     final progress = ValueNotifier<int>(0);
     if (mounted) {
       showDialog<void>(
@@ -155,16 +163,49 @@ class _SyncPageState extends State<SyncPage> {
       );
     }
     try {
-      await applyPull(client, name, Directory(localPath), plan,
-          onProgress: (applied, _) => progress.value = applied);
+      if (direction == SyncDirection.pull) {
+        await applyPull(client, name, root, plan,
+            onProgress: (applied, _) => progress.value = applied);
+      } else {
+        await applyPush(client, name, root, plan,
+            onProgress: (applied, _) => progress.value = applied);
+      }
       if (mounted) Navigator.of(context).pop(); // close applying dialog
-      _toast('Applied ${plan.length} change(s) to "$name".');
+      final verb = direction == SyncDirection.pull ? 'Downloaded' : 'Uploaded';
+      _toast('$verb ${plan.length} change(s) for "$name".');
     } catch (e) {
       if (mounted) Navigator.of(context).pop();
       _toast('Sync failed: $e');
     } finally {
       progress.dispose();
     }
+  }
+
+  // Lets the user choose whether to pull the folder down or push it up.
+  Future<void> _chooseDirection(String name) async {
+    final direction = await showModalBottomSheet<SyncDirection>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.download),
+              title: Text('Get "$name" from ${widget.device.name}'),
+              subtitle: const Text('Apply their changes to this device'),
+              onTap: () => Navigator.pop(context, SyncDirection.pull),
+            ),
+            ListTile(
+              leading: const Icon(Icons.upload),
+              title: Text('Send "$name" to ${widget.device.name}'),
+              subtitle: const Text('Apply this device\'s changes to theirs'),
+              onTap: () => Navigator.pop(context, SyncDirection.push),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (direction != null) await _sync(name, direction);
   }
 
   void _toast(String message) {
@@ -212,7 +253,7 @@ class _SyncPageState extends State<SyncPage> {
           leading: const Icon(Icons.folder_shared),
           title: Text(dir.name),
           trailing: const Icon(Icons.sync),
-          onTap: () => _sync(dir.name),
+          onTap: () => _chooseDirection(dir.name),
         );
       },
     );
@@ -221,15 +262,22 @@ class _SyncPageState extends State<SyncPage> {
 
 /// Shows what a sync would change, for confirmation before anything is written.
 class _DiffDialog extends StatelessWidget {
-  const _DiffDialog({required this.name, required this.plan});
+  const _DiffDialog({
+    required this.name,
+    required this.plan,
+    required this.direction,
+  });
 
   final String name;
   final ChangeSet plan;
+  final SyncDirection direction;
 
   @override
   Widget build(BuildContext context) {
+    final where =
+        direction == SyncDirection.pull ? 'here' : 'on the other device';
     return AlertDialog(
-      title: Text('Changes to "$name"'),
+      title: Text('Changes to "$name" $where'),
       content: SizedBox(
         width: double.maxFinite,
         child: ListView(

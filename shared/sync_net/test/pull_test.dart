@@ -1,6 +1,5 @@
 import 'dart:io';
 
-import 'package:sync_core/sync_core.dart';
 import 'package:sync_net/sync_net.dart';
 import 'package:test/test.dart';
 
