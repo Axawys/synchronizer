@@ -17,6 +17,9 @@ build/
 # noise across machines, so they are ignored here.
 **/pubspec.lock
 
+# Packaged release artefacts (tarballs and the trees they are built from).
+dist/
+
 # Generated localisation code: `flutter pub get` rebuilds it from the .arb
 # files, so the source of truth is lib/l10n/*.arb and the output is noise.
 shared/sync_ui/lib/l10n/gen/
