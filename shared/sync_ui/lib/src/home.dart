@@ -2,8 +2,7 @@ import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:sync_net/sync_net.dart';
 
-import 'prefs_trust_store.dart';
-import 'shared_folders_page.dart';
+import 'app_shell.dart';
 import 'storage.dart';
 import 'sync_log_page.dart';
 import 'sync_page.dart';
@@ -43,7 +42,7 @@ class SynchronizerApp extends StatelessWidget {
       ),
       // Follow the system light/dark setting automatically.
       themeMode: ThemeMode.system,
-      home: DevicesPage(
+      home: HomeShell(
         self: self,
         prepareNetwork: prepareNetwork,
         autoStart: autoStart,
@@ -55,15 +54,22 @@ class SynchronizerApp extends StatelessWidget {
 /// Lists devices found on the network and drives pairing in both directions:
 /// tapping a device starts an outgoing request, and an inbound request pops a
 /// confirmation dialog on this device.
+///
+/// The trust store and shared folders come from [HomeShell], because the
+/// folders screen edits the very set this screen serves to peers.
 class DevicesPage extends StatefulWidget {
   const DevicesPage({
     super.key,
     required this.self,
+    required this.trust,
+    required this.folders,
     this.prepareNetwork,
     this.autoStart = true,
   });
 
   final DeviceInfo self;
+  final TrustStore trust;
+  final SharedFolders folders;
   final Future<void> Function()? prepareNetwork;
   final bool autoStart;
 
@@ -72,8 +78,6 @@ class DevicesPage extends StatefulWidget {
 }
 
 class _DevicesPageState extends State<DevicesPage> {
-  final TrustStore _trust = PrefsTrustStore();
-  final SharedFolders _sharedFolders = SharedFolders();
   late final DiscoveryService _discovery;
   late final PeerServer _pairingServer;
   AppLifecycleListener? _lifecycle;
@@ -88,9 +92,9 @@ class _DevicesPageState extends State<DevicesPage> {
     _discovery = DiscoveryService(widget.self);
     _pairingServer = PeerServer(
       widget.self,
-      _trust,
+      widget.trust,
       port: widget.self.port,
-      directories: _sharedFolders,
+      directories: widget.folders,
     );
     if (widget.autoStart) {
       // Closing the app should take this device off other people's lists right
@@ -111,7 +115,6 @@ class _DevicesPageState extends State<DevicesPage> {
 
   Future<void> _init() async {
     await _refreshTrusted();
-    await _sharedFolders.load();
     await widget.prepareNetwork?.call();
     _discovery.peers.listen((devices) {
       if (mounted) setState(() => _devices = devices);
@@ -122,7 +125,7 @@ class _DevicesPageState extends State<DevicesPage> {
   }
 
   Future<void> _refreshTrusted() async {
-    final trusted = await _trust.all();
+    final trusted = await widget.trust.all();
     if (mounted) setState(() => _trustedIds = trusted.map((p) => p.id).toSet());
   }
 
@@ -130,7 +133,6 @@ class _DevicesPageState extends State<DevicesPage> {
   void dispose() {
     _lifecycle?.dispose();
     _shutdownNetworking();
-    _sharedFolders.dispose();
     super.dispose();
   }
 
@@ -153,7 +155,7 @@ class _DevicesPageState extends State<DevicesPage> {
   // Tapping a device: open the sync screen if already paired, otherwise pair.
   Future<void> _openDevice(DeviceInfo device) async {
     if (device.address == null) return;
-    final trusted = await _trust.get(device.id);
+    final trusted = await widget.trust.get(device.id);
     if (trusted == null) {
       await _startPairing(device);
       return;
@@ -166,16 +168,6 @@ class _DevicesPageState extends State<DevicesPage> {
         device: device,
       ),
     ));
-  }
-
-  void _openSharedFolders() {
-    Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => SharedFoldersPage(folders: _sharedFolders),
-    ));
-  }
-
-  void _openSettings() {
-    showDialog<void>(context: context, builder: (_) => const _SettingsDialog());
   }
 
   void _openHistory() {
@@ -191,7 +183,7 @@ class _DevicesPageState extends State<DevicesPage> {
     setState(() => _busy = true);
 
     final codeNotifier = ValueNotifier<String?>(null);
-    final future = PairingClient(widget.self, _trust).pair(
+    final future = PairingClient(widget.self, widget.trust).pair(
       address,
       device.port,
       onCode: (_, code) => codeNotifier.value = code,
@@ -223,19 +215,9 @@ class _DevicesPageState extends State<DevicesPage> {
         title: const Text('Devices on this network'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.folder_shared),
-            tooltip: 'Shared folders',
-            onPressed: _openSharedFolders,
-          ),
-          IconButton(
             icon: const Icon(Icons.history),
             tooltip: 'Sync history',
             onPressed: _openHistory,
-          ),
-          IconButton(
-            icon: const Icon(Icons.settings),
-            tooltip: 'Settings',
-            onPressed: _openSettings,
           ),
         ],
         bottom: PreferredSize(
@@ -281,53 +263,6 @@ IconData _iconFor(DevicePlatform platform) => switch (platform) {
       DevicePlatform.unknown => Icons.devices_other,
     };
 
-/// Small settings sheet. The theme follows the system automatically, so the
-/// only choice here is how changes are applied.
-class _SettingsDialog extends StatefulWidget {
-  const _SettingsDialog();
-
-  @override
-  State<_SettingsDialog> createState() => _SettingsDialogState();
-}
-
-class _SettingsDialogState extends State<_SettingsDialog> {
-  bool? _light;
-
-  @override
-  void initState() {
-    super.initState();
-    SyncSettings.lightMode().then((value) {
-      if (mounted) setState(() => _light = value);
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AlertDialog(
-      title: const Text('Settings'),
-      content: _light == null
-          ? const SizedBox(
-              height: 48, child: Center(child: CircularProgressIndicator()))
-          : SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Plain sync'),
-              subtitle: const Text(
-                  'Apply changes without showing the diff for confirmation.'),
-              value: _light!,
-              onChanged: (value) {
-                setState(() => _light = value);
-                SyncSettings.setLightMode(value);
-              },
-            ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Close'),
-        ),
-      ],
-    );
-  }
-}
 
 class _Searching extends StatelessWidget {
   const _Searching();

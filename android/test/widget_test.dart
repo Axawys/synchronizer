@@ -1,8 +1,11 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sync_net/sync_net.dart';
 import 'package:sync_ui/sync_ui.dart';
 
 void main() {
+  setUp(() => SharedPreferences.setMockInitialValues({}));
+
   testWidgets('shows this device name and searches when no peers found',
       (tester) async {
     const self = DeviceInfo(
