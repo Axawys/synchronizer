@@ -262,9 +262,7 @@ void main() {
       final client = await connect();
       addTearDown(client.close);
       final merge = await computeMerge(client, 'notes', local, base);
-      // The file goes away between working out the sync and running it, so the
-      // push fails the way a dropped connection or an unreadable file would.
-      File('${local.path}/note.md').deleteSync();
+      await client.close(); // the connection drops mid-sync
 
       final outcome = await runSync(client, 'notes', local, base,
           [for (final item in merge.items) ResolvedMerge.natural(item)]);

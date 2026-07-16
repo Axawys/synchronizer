@@ -130,8 +130,7 @@ class PairingClient {
       ));
       return PairingResult(PairingStatus.paired, peer: peer, code: code);
     } finally {
-      await frames.cancel();
-      await conn.close();
+      await closeConnection(conn, frames);
     }
   }
 }
@@ -174,8 +173,7 @@ Future<void> handlePairingRequest(
         secret: pairingSecret(clientNonce, serverNonce),
       ));
     }
-    await frames.cancel();
-    await conn.close();
+    await closeConnection(conn, frames);
   }
 
   emit(IncomingPairing._(peer, code, decide));

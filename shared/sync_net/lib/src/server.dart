@@ -73,12 +73,10 @@ class PeerServer {
             directories: directories,
           );
         default:
-          await frames.cancel();
-          await conn.close();
+          await closeConnection(conn, frames);
       }
     } catch (_) {
-      await frames.cancel();
-      await conn.close();
+      await closeConnection(conn, frames);
     }
   }
 

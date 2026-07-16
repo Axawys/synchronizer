@@ -99,7 +99,7 @@ class SyncClient {
     try {
       conn.send({'type': SessionType.hello, 'deviceId': self.id});
 
-      final challenge = await _expect(frames, SessionType.challenge);
+      final challenge = await _expect(frames, SessionType.challenge, conn);
       final serverNonce = challenge.header['nonce']! as String;
 
       final clientNonce = _nonce();
@@ -109,7 +109,7 @@ class SyncClient {
         'mac': _mac(trusted.secret, 'client:$serverNonce'),
       });
 
-      final reply = await _next(frames);
+      final reply = await _next(frames, conn);
       if (reply.type == SessionType.denied) {
         throw SessionException(
             'authentication refused: ${reply.header['reason'] ?? 'unknown'}');
@@ -134,15 +134,14 @@ class SyncClient {
         ),
       );
     } catch (_) {
-      await frames.cancel();
-      await conn.close();
+      await closeConnection(conn, frames);
       rethrow;
     }
   }
 
   Future<List<SharedDir>> listDirectories() async {
     _conn.send({'type': SessionType.listDirs});
-    final reply = await _expect(_frames, SessionType.dirs);
+    final reply = await _expect(_frames, SessionType.dirs, _conn);
     final list = (reply.header['dirs']! as List).cast<Map<String, Object?>>();
     return list.map((d) => SharedDir(d['name']! as String)).toList();
   }
@@ -150,7 +149,7 @@ class SyncClient {
   /// Fetches the peer's current manifest for [name].
   Future<Manifest> fetchManifest(String name) async {
     _conn.send({'type': SessionType.getManifest, 'name': name});
-    final reply = await _next(_frames);
+    final reply = await _next(_frames, _conn);
     if (reply.type == SessionType.error) {
       throw SessionException(reply.header['message']?.toString() ?? 'error');
     }
@@ -163,7 +162,7 @@ class SyncClient {
   /// Fetches the raw bytes of one file inside [name].
   Future<Uint8List> fetchFile(String name, String path) async {
     _conn.send({'type': SessionType.getFile, 'name': name, 'path': path});
-    final reply = await _next(_frames);
+    final reply = await _next(_frames, _conn);
     if (reply.type == SessionType.error) {
       throw SessionException(reply.header['message']?.toString() ?? 'error');
     }
@@ -195,7 +194,7 @@ class SyncClient {
   }
 
   Future<void> _expectAck(String what) async {
-    final reply = await _next(_frames);
+    final reply = await _next(_frames, _conn);
     if (reply.type == SessionType.error) {
       throw SessionException(reply.header['message']?.toString() ?? 'error');
     }
@@ -204,10 +203,7 @@ class SyncClient {
     }
   }
 
-  Future<void> close() async {
-    await _frames.cancel();
-    await _conn.close();
-  }
+  Future<void> close() => closeConnection(_conn, _frames);
 }
 
 /// Server side for one connection whose first frame is a [SessionType.hello].
@@ -394,15 +390,22 @@ String _nonce() {
   return generateNonce();
 }
 
-Future<Frame> _next(StreamIterator<Frame> frames) async {
-  if (!await frames.moveNext()) {
+/// The next frame, waiting only as long as the link shows signs of life when
+/// [conn] is given. Requests pass it; the server's idle wait for the next
+/// request does not, since a session with nobody typing into it is not broken.
+Future<Frame> _next(StreamIterator<Frame> frames, [PeerConnection? conn]) async {
+  final moved = conn == null
+      ? frames.moveNext()
+      : conn.awaitReply(frames.moveNext());
+  if (!await moved) {
     throw const SessionException('connection closed');
   }
   return frames.current;
 }
 
-Future<Frame> _expect(StreamIterator<Frame> frames, String type) async {
-  final frame = await _next(frames);
+Future<Frame> _expect(StreamIterator<Frame> frames, String type,
+    [PeerConnection? conn]) async {
+  final frame = await _next(frames, conn);
   if (frame.type != type) {
     throw SessionException('expected $type but got ${frame.type}');
   }
