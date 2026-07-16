@@ -176,10 +176,16 @@ Future<FilePreview> _conflict(
     );
   }
 
+  // Still needs a decision, but the two versions are readable, so show how they
+  // differ rather than only naming the file. Nothing to merge against at all
+  // (binary, or an edit against a delete) leaves the lines empty.
   return FilePreview(
     item: item,
     kind: PreviewKind.conflict,
     side: PreviewSide.both,
+    lines: merged.isMergeable || merged.ourLines.isNotEmpty
+        ? diffLines(merged.theirLines, merged.ourLines)
+        : const [],
     conflict: merged,
   );
 }

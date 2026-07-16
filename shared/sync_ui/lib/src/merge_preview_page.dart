@@ -151,14 +151,16 @@ class _MergePreviewPageState extends State<MergePreviewPage> {
       leading: Icon(_iconFor(file.kind), size: 20),
       title: Text(file.path, style: const TextStyle(fontSize: 14)),
       subtitle: Text([_labelFor(file.kind), ?counts].join('  ')),
-      children: file.lines.isEmpty
-          ? [
-              const ListTile(
-                dense: true,
-                title: Text('No line preview (binary file or a deletion).'),
-              )
-            ]
-          : [_DiffView(file.lines)],
+      children: [
+        if (file.conflict?.ancestorKnown == false) const _GuessedBaseNote(),
+        if (file.lines.isEmpty)
+          const ListTile(
+            dense: true,
+            title: Text('No line preview (binary file or a deletion).'),
+          )
+        else
+          _DiffView(file.lines),
+      ],
     );
   }
 
@@ -166,14 +168,22 @@ class _MergePreviewPageState extends State<MergePreviewPage> {
     final merge = file.conflict!.merge;
 
     if (merge == null) {
-      // Nothing to merge against: the whole file has to go one way.
+      // Nothing to line up line by line: the whole file has to go one way. The
+      // versions are still shown side by side where they are readable, so the
+      // choice is not made blind.
       return ExpansionTile(
         leading: Icon(Icons.warning,
             size: 20, color: Theme.of(context).colorScheme.error),
         title: Text(file.path, style: const TextStyle(fontSize: 14)),
-        subtitle: const Text('Cannot be merged; keep one version'),
+        subtitle: Text(file.lines.isEmpty
+            ? 'Cannot be compared; keep one version'
+            : 'Cannot be merged; keep one version'),
         initiallyExpanded: true,
         children: [
+          if (file.lines.isNotEmpty) ...[
+            _DiffView(file.lines, insertLabel: 'mine', deleteLabel: 'theirs'),
+            const SizedBox(height: 8),
+          ],
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
             child: SegmentedButton<bool>(
@@ -199,6 +209,7 @@ class _MergePreviewPageState extends State<MergePreviewPage> {
           '${hunks.length == 1 ? 'spot' : 'spots'}; the rest merges cleanly'),
       initiallyExpanded: true,
       children: [
+        if (!file.conflict!.ancestorKnown) const _GuessedBaseNote(),
         for (var i = 0; i < hunks.length; i++) _hunkView(file.path, i, hunks[i]),
       ],
     );
@@ -246,6 +257,35 @@ class _MergePreviewPageState extends State<MergePreviewPage> {
         PreviewKind.merged => 'Merged',
         PreviewKind.conflict => 'Conflict',
       };
+}
+
+/// Says plainly that a merge had no ancestor to work from, because the result
+/// is a good guess rather than a certainty and the user is about to approve it.
+class _GuessedBaseNote extends StatelessWidget {
+  const _GuessedBaseNote();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.info_outline, size: 16),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'First sync of this file: there is no copy from a previous sync '
+              'to compare against, so the two versions were merged against '
+              'what they have in common. A line deleted on one device can come '
+              'back. Later syncs merge exactly.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 /// The lines a change adds and removes, rendered like a diff.

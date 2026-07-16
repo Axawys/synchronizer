@@ -35,6 +35,23 @@ List<String> splitLines(String text) => text.split('\n');
 /// Joins lines produced by [splitLines] back into a file's text.
 String joinLines(List<String> lines) => lines.join('\n');
 
+/// The lines two versions share, in order: everything neither of them can be
+/// said to have touched.
+///
+/// This stands in for the real ancestor when none was kept - a folder synced
+/// for the first time, where both devices already had the file. Merging against
+/// it combines the parts that differ instead of forcing a whole-file choice.
+///
+/// It is a guess, and it has one honest limitation: with no ancestor there is no
+/// way to tell "this device added a line" from "the other device removed it", so
+/// it reads every difference as an addition and a line deleted on one side comes
+/// back. It errs towards keeping text, never towards losing it, and callers are
+/// expected to say so rather than pass it off as a real merge.
+List<String> commonBase(List<String> ours, List<String> theirs) => [
+      for (final line in diffLines(ours, theirs))
+        if (line.op == DiffOp.equal) line.text,
+    ];
+
 /// Above this many cells in the comparison table we stop looking for the
 /// prettiest diff. Only reached by very large files with very large edits, and
 /// only after the common head and tail have already been trimmed away.

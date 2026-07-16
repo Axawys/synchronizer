@@ -158,7 +158,7 @@ class _SyncPageState extends State<SyncPage> {
       resolved = choice;
     }
 
-    await _apply(client, name, root, resolved);
+    await _apply(client, name, root, resolved, base);
   }
 
   /// Plain mode: merge what merges, and settle the rest by taking whichever
@@ -184,7 +184,7 @@ class _SyncPageState extends State<SyncPage> {
   }
 
   Future<void> _apply(SyncClient client, String name, Directory root,
-      List<ResolvedMerge> resolved) async {
+      List<ResolvedMerge> resolved, Manifest base) async {
     final progress = ValueNotifier<int>(0);
     if (mounted) {
       showDialog<void>(
@@ -195,15 +195,14 @@ class _SyncPageState extends State<SyncPage> {
       );
     }
     try {
-      final report = await applyMerge(client, name, root, resolved,
+      final outcome = await runSync(client, name, root, base, resolved,
           onProgress: (done, _) => progress.value = done);
+      final report = outcome.report;
 
-      if (report.ok) {
-        // Both sides now match; record it as the base for next time. If any
-        // file failed we keep the old base, so the next sync still knows what
-        // changed where.
-        await BaseManifests.save(
-            widget.device.id, name, await Manifest.scan(root));
+      // Set only when the sync finished, in which case both sides now match and
+      // this is the ancestor the next merge works from.
+      if (outcome.newBase != null) {
+        await BaseManifests.save(widget.device.id, name, outcome.newBase!);
       }
       await _log(name, resolved, report);
 

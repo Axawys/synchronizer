@@ -146,6 +146,40 @@ void main() {
     expect(file.kind, PreviewKind.conflict);
     expect(preview.hasConflicts, isTrue);
     expect(file.conflict!.merge!.conflicts.single.ours, ['mine']);
+    // A conflict used to arrive with no lines at all, so the screen could only
+    // name the file. The two versions are readable, so they are shown.
+    expect(file.lines.where((l) => l.op == DiffOp.insert).map((l) => l.text),
+        contains('mine'));
+    expect(file.lines.where((l) => l.op == DiffOp.delete).map((l) => l.text),
+        contains('theirs'));
+  });
+
+  test('a conflict with no ancestor still shows its lines, and says so',
+      () async {
+    // The first sync of a file both devices already had: nothing was ever
+    // recorded to merge against.
+    File('${local.path}/note.md').writeAsStringSync('title\nmine\n');
+    File('${remote.path}/note.md').writeAsStringSync('title\ntheirs\n');
+
+    final preview = await previewOf(Manifest({}));
+    final file = forPath(preview, 'note.md');
+
+    expect(file.kind, PreviewKind.conflict);
+    expect(file.conflict!.ancestorKnown, isFalse);
+    expect(file.lines, isNotEmpty, reason: 'the diff is still worth showing');
+    // Only the line that actually differs needs deciding; "title" is agreed.
+    expect(file.conflict!.merge!.conflicts.single.ours, ['mine']);
+  });
+
+  test('a binary conflict admits it has nothing to show', () async {
+    File('${local.path}/pic.png').writeAsBytesSync([0x89, 0x00, 0x01]);
+    File('${remote.path}/pic.png').writeAsBytesSync([0x89, 0x00, 0x02]);
+
+    final file = forPath(await previewOf(Manifest({})), 'pic.png');
+
+    expect(file.kind, PreviewKind.conflict);
+    expect(file.conflict!.isMergeable, isFalse);
+    expect(file.lines, isEmpty, reason: 'no lines invented for binary');
   });
 
   group('folders', () {

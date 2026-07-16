@@ -196,4 +196,58 @@ void main() {
     });
     expect(utf8.decode(taken.single.content!), 'theirs');
   });
+
+  testWidgets('a conflict that cannot be merged still shows both versions',
+      (tester) async {
+    // Nothing to merge against, but the text is readable, so the choice is not
+    // made blind: the screen used to show the file name and nothing else.
+    final conflictItem = item('note.md', MergeKind.conflict);
+    final preview = SyncPreview(
+      files: [
+        FilePreview(
+          item: conflictItem,
+          kind: PreviewKind.conflict,
+          side: PreviewSide.both,
+          lines: const [
+            DiffLine(DiffOp.delete, 'theirs'),
+            DiffLine(DiffOp.insert, 'mine'),
+          ],
+          conflict: MergedConflict(item: conflictItem),
+        ),
+      ],
+      folders: const [],
+    );
+
+    await show(tester, preview);
+
+    expect(find.text('+ mine'), findsOneWidget);
+    expect(find.text('− theirs'), findsOneWidget);
+    expect(find.textContaining('keep one version'), findsOneWidget);
+  });
+
+  testWidgets('a merge with a guessed ancestor says so', (tester) async {
+    // The user is approving this, so the screen must not pass a guess off as a
+    // real merge: a line deleted on one device can come back.
+    final merge = merge3(['a'], ['a', 'mine'], ['theirs', 'a']);
+    final mergedItem = item('note.md', MergeKind.conflict);
+    final preview = SyncPreview(
+      files: [
+        FilePreview(
+          item: mergedItem,
+          kind: PreviewKind.merged,
+          side: PreviewSide.both,
+          lines: const [DiffLine(DiffOp.insert, 'theirs')],
+          conflict: MergedConflict(
+              item: mergedItem, merge: merge, ancestorKnown: false),
+        ),
+      ],
+      folders: const [],
+    );
+
+    await show(tester, preview);
+    await tester.tap(find.text('note.md'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('no copy from a previous sync'), findsOneWidget);
+  });
 }
