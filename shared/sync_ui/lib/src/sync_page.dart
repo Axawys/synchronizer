@@ -7,6 +7,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:sync_net/sync_net.dart';
 
 import 'folder_picker_page.dart';
+import 'merge_preview_page.dart';
 import 'storage.dart';
 
 /// Screen for a paired device: connects a session, lists the folders it shares,
@@ -134,28 +135,52 @@ class _SyncPageState extends State<SyncPage> {
 
     final List<ResolvedMerge> resolved;
     if (await SyncSettings.lightMode()) {
-      // No one to ask: resolve conflicts by taking the more recently edited side.
-      resolved = [
-        for (final item in merge.items)
-          item.kind == MergeKind.conflict
-              ? ResolvedMerge(item, toLocal: conflictResolvesToLocal(item))
-              : ResolvedMerge.natural(item),
-      ];
+      resolved = await _resolveWithoutAsking(client, name, root, merge);
     } else {
+      final SyncPreview preview;
+      try {
+        preview = await buildPreview(client, name, root, merge);
+      } catch (e) {
+        _toast('Could not prepare the preview: $e');
+        return;
+      }
       if (!mounted) return;
-      final choice = await showDialog<List<ResolvedMerge>>(
-        context: context,
-        builder: (context) => _MergeDialog(
-          name: name,
-          merge: merge,
-          deviceName: widget.device.name,
+      final choice = await Navigator.of(context).push<List<ResolvedMerge>>(
+        MaterialPageRoute(
+          builder: (_) => MergePreviewPage(
+            folderName: name,
+            deviceName: widget.device.name,
+            preview: preview,
+          ),
         ),
       );
-      if (choice == null) return; // cancelled
+      if (choice == null) return; // backed out
       resolved = choice;
     }
 
     await _apply(client, name, root, resolved);
+  }
+
+  /// Plain mode: merge what merges, and settle the rest by taking whichever
+  /// side was edited more recently, since there is nobody to ask.
+  Future<List<ResolvedMerge>> _resolveWithoutAsking(
+    SyncClient client,
+    String name,
+    Directory root,
+    MergeResult merge,
+  ) async {
+    final resolved = <ResolvedMerge>[];
+    for (final item in merge.items) {
+      if (item.kind != MergeKind.conflict) {
+        resolved.add(ResolvedMerge.natural(item));
+        continue;
+      }
+      final merged = await mergeConflict(client, name, root, item);
+      resolved.add(merged.isClean
+          ? ResolvedMerge.merged(item, merged.merge!.clean!)
+          : ResolvedMerge(item, toLocal: conflictResolvesToLocal(item)));
+    }
+    return resolved;
   }
 
   Future<void> _apply(SyncClient client, String name, Directory root,
@@ -263,144 +288,6 @@ class _SyncPageState extends State<SyncPage> {
         );
       },
     );
-  }
-}
-
-/// Shows a reconciliation before it runs: files to download, files to upload,
-/// and any conflicts, each with a per-file choice of which side wins.
-class _MergeDialog extends StatefulWidget {
-  const _MergeDialog({
-    required this.name,
-    required this.merge,
-    required this.deviceName,
-  });
-
-  final String name;
-  final MergeResult merge;
-  final String deviceName;
-
-  @override
-  State<_MergeDialog> createState() => _MergeDialogState();
-}
-
-class _MergeDialogState extends State<_MergeDialog> {
-  // For each conflicting path, true = keep this device's version. Defaults to
-  // the opposite of the automatic "take the newer side" choice.
-  late final Map<String, bool> _keepLocal = {
-    for (final item in widget.merge.conflicts)
-      item.path: !conflictResolvesToLocal(item),
-  };
-
-  List<ResolvedMerge> _resolve() {
-    return [
-      for (final item in widget.merge.items)
-        if (item.kind == MergeKind.conflict)
-          ResolvedMerge(item, toLocal: !_keepLocal[item.path]!)
-        else
-          ResolvedMerge.natural(item),
-    ];
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final merge = widget.merge;
-    return AlertDialog(
-      title: Text('Sync "${widget.name}"'),
-      content: SizedBox(
-        width: double.maxFinite,
-        child: ListView(
-          shrinkWrap: true,
-          children: [
-            if (merge.conflicts.isNotEmpty) ...[
-              _heading(context, 'Conflicts', Icons.warning,
-                  Theme.of(context).colorScheme.error),
-              const Padding(
-                padding: EdgeInsets.only(left: 26, bottom: 4),
-                child: Text('Changed on both sides. Choose which to keep:',
-                    style: TextStyle(fontStyle: FontStyle.italic)),
-              ),
-              for (final item in merge.conflicts) _conflictRow(item),
-            ],
-            _fileList(context, 'Download from ${widget.deviceName}',
-                Icons.download, Colors.blue, merge.pulls),
-            _fileList(context, 'Upload to ${widget.deviceName}', Icons.upload,
-                Theme.of(context).colorScheme.primary, merge.pushes),
-          ],
-        ),
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel'),
-        ),
-        FilledButton(
-          onPressed: () => Navigator.pop(context, _resolve()),
-          child: Text('Sync ${merge.length}'),
-        ),
-      ],
-    );
-  }
-
-  Widget _conflictRow(MergeItem item) {
-    return Padding(
-      padding: const EdgeInsets.only(left: 26, top: 4, bottom: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(item.path, style: Theme.of(context).textTheme.bodyMedium),
-          const SizedBox(height: 4),
-          SegmentedButton<bool>(
-            style: const ButtonStyle(visualDensity: VisualDensity.compact),
-            segments: const [
-              ButtonSegment(value: true, label: Text('Keep mine')),
-              ButtonSegment(value: false, label: Text('Take theirs')),
-            ],
-            selected: {_keepLocal[item.path]!},
-            onSelectionChanged: (s) =>
-                setState(() => _keepLocal[item.path] = s.first),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _heading(BuildContext context, String label, IconData icon, Color c) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Row(
-        children: [
-          Icon(icon, size: 18, color: c),
-          const SizedBox(width: 8),
-          Text(label, style: Theme.of(context).textTheme.titleSmall),
-        ],
-      ),
-    );
-  }
-
-  Widget _fileList(BuildContext context, String label, IconData icon,
-      Color color, Iterable<MergeItem> items) {
-    final list = items.toList();
-    if (list.isEmpty) return const SizedBox.shrink();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        _heading(context, '$label (${list.length})', icon, color),
-        for (final item in list)
-          Padding(
-            padding: const EdgeInsets.only(left: 26, bottom: 2),
-            child: Text(_describe(item),
-                style: Theme.of(context).textTheme.bodySmall),
-          ),
-      ],
-    );
-  }
-
-  // Marks deletions so the user is not surprised by a removal.
-  String _describe(MergeItem item) {
-    final gone = item.kind == MergeKind.pullToLocal
-        ? item.remote == null
-        : item.local == null;
-    return gone ? '${item.path}  (delete)' : item.path;
   }
 }
 

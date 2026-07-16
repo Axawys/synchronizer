@@ -15,6 +15,7 @@ export 'src/device_info.dart';
 export 'src/discovery.dart';
 export 'src/frame.dart';
 export 'src/pairing.dart';
+export 'src/preview.dart';
 export 'src/pull.dart';
 export 'src/push.dart';
 export 'src/reconcile.dart';
