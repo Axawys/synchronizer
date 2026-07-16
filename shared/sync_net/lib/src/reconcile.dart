@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
@@ -6,21 +7,127 @@ import 'package:sync_core/sync_core.dart';
 
 import 'session.dart';
 
-/// A [MergeItem] together with the direction it will be applied. Non-conflict
-/// items take the direction implied by their kind; a conflict must be resolved
-/// to one direction before it can be applied.
+/// A [MergeItem] together with how it will be applied.
+///
+/// Most items just move one way. A conflict that was merged instead carries
+/// [content]: the combined text, which goes to *both* devices, so neither side
+/// loses its edits.
 class ResolvedMerge {
-  const ResolvedMerge(this.item, {required this.toLocal});
+  const ResolvedMerge(this.item, {required this.toLocal, this.content});
 
   final MergeItem item;
 
   /// True to bring the remote's version here (pull); false to send this
-  /// device's version to the remote (push).
+  /// device's version to the remote (push). Ignored when [content] is set.
   final bool toLocal;
+
+  /// Merged text to write to both sides, or null to just move one side's
+  /// version across.
+  final List<int>? content;
+
+  bool get isMerged => content != null;
 
   /// The natural resolution for a non-conflict item.
   factory ResolvedMerge.natural(MergeItem item) =>
       ResolvedMerge(item, toLocal: item.kind == MergeKind.pullToLocal);
+
+  /// A conflict settled by combining both sides.
+  factory ResolvedMerge.merged(MergeItem item, List<String> lines) =>
+      ResolvedMerge(item,
+          toLocal: true, content: utf8.encode(joinLines(lines)));
+}
+
+/// A conflicting file with the three-way merge already worked out.
+class MergedConflict {
+  const MergedConflict({
+    required this.item,
+    this.merge,
+    this.ourLines = const [],
+    this.theirLines = const [],
+  });
+
+  final MergeItem item;
+
+  /// The merge, or null when the file cannot be merged at all: it is binary,
+  /// too large, one side deleted it, or no base copy was kept. Those still have
+  /// to be settled by choosing a side outright.
+  final TextMergeResult? merge;
+
+  final List<String> ourLines;
+  final List<String> theirLines;
+
+  bool get isMergeable => merge != null;
+
+  /// True when merging settled everything and nothing needs asking.
+  bool get isClean => merge != null && !merge!.hasConflicts;
+}
+
+/// Works out the three-way merge for one conflicting file.
+///
+/// Needs three things to line up: both sides still have the file, both are
+/// mergeable text, and a base copy from the last sync exists. Miss any of them
+/// and there is nothing to merge against, so the caller must ask the user to
+/// pick a side.
+Future<MergedConflict> mergeConflict(
+  SyncClient client,
+  String name,
+  Directory localRoot,
+  MergeItem item,
+) async {
+  if (item.local == null || item.remote == null) {
+    return MergedConflict(item: item); // an edit against a delete
+  }
+
+  final localBytes = await _localFile(localRoot, item.path).readAsBytes();
+  final remoteBytes = await client.fetchFile(name, item.path);
+  if (!isMergeableText(localBytes) || !isMergeableText(remoteBytes)) {
+    return MergedConflict(item: item);
+  }
+
+  final ourLines = splitLines(utf8.decode(localBytes));
+  final theirLines = splitLines(utf8.decode(remoteBytes));
+
+  final baseText = await BaseStore(localRoot).read(item.path);
+  if (baseText == null) {
+    return MergedConflict(
+        item: item, ourLines: ourLines, theirLines: theirLines);
+  }
+
+  return MergedConflict(
+    item: item,
+    merge: merge3(splitLines(baseText), ourLines, theirLines),
+    ourLines: ourLines,
+    theirLines: theirLines,
+  );
+}
+
+/// Brings the base copies in line with what the two devices have just agreed
+/// on, so the next sync has an ancestor to merge against.
+///
+/// Only files whose content actually moved are rewritten - comparing the old
+/// base manifest with the new one is what identifies them - so this costs a
+/// full pass over the folder only on a first sync.
+Future<void> refreshBaseStore(
+  Directory localRoot,
+  Manifest previousBase,
+  Manifest current,
+) async {
+  final store = BaseStore(localRoot);
+
+  for (final entry in current.entries.values) {
+    if (previousBase.entries[entry.path]?.hash == entry.hash &&
+        store.fileFor(entry.path).existsSync()) {
+      continue; // unchanged and already kept
+    }
+    final file = _localFile(localRoot, entry.path);
+    if (file.existsSync()) {
+      await store.write(entry.path, await file.readAsBytes());
+    }
+  }
+
+  for (final path in previousBase.entries.keys) {
+    if (!current.entries.containsKey(path)) await store.remove(path);
+  }
 }
 
 /// Fetches the peer's manifest, scans the local copy, and reconciles both
@@ -98,7 +205,12 @@ Future<MergeReport> applyMerge(
   for (final r in resolved) {
     final item = r.item;
     try {
-      if (r.toLocal) {
+      final merged = r.content;
+      if (merged != null) {
+        // A merged file is the same on both sides now, so it goes both ways.
+        await _writeLocal(localRoot, item.path, merged);
+        await client.putFile(name, item.path, merged);
+      } else if (r.toLocal) {
         // Bring the remote's version here.
         if (item.remote == null) {
           await _deleteLocal(localRoot, item.path);

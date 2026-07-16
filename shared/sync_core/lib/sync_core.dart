@@ -10,6 +10,7 @@ export 'src/file_entry.dart';
 export 'src/manifest.dart';
 export 'src/diff.dart';
 export 'src/apply.dart';
+export 'src/base_store.dart';
 export 'src/merge.dart';
 export 'src/text_diff.dart';
 export 'src/text_merge.dart';
