@@ -12,7 +12,12 @@ void main() {
     port: 47800,
   );
 
-  setUp(() => SharedPreferences.setMockInitialValues({}));
+  // resetStatic clears the instance a previous test cached, without which
+  // mock values set here would never be read back.
+  setUp(() {
+    SharedPreferences.resetStatic();
+    SharedPreferences.setMockInitialValues({});
+  });
 
   testWidgets('shows this device name and searches when no peers found',
       (tester) async {
@@ -23,6 +28,27 @@ void main() {
 
     expect(find.text('This device: test-desktop'), findsOneWidget);
     expect(find.text('Looking for devices...'), findsOneWidget);
+  });
+
+  testWidgets('reports the painted brightness, so the window frame can match it',
+      (tester) async {
+    // GTK draws the frame, so it only follows the theme if we tell it to.
+    SharedPreferences.resetStatic();
+    SharedPreferences.setMockInitialValues({'theme_mode': 'dark'});
+
+    final reported = <Brightness>[];
+    await tester.pumpWidget(SynchronizerApp(
+      self: self,
+      autoStart: false,
+      applyWindowBrightness: (brightness) async => reported.add(brightness),
+    ));
+    // One frame to let the stored settings load, then past MaterialApp's theme
+    // animation, which is what actually flips the painted brightness.
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    // Starts light (nothing loaded yet), then follows the dark theme through.
+    expect(reported.last, Brightness.dark);
   });
 
   testWidgets('the desktop rail navigates between the three destinations',

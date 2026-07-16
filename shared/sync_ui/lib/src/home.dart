@@ -20,11 +20,18 @@ class SynchronizerApp extends StatefulWidget {
     super.key,
     required this.self,
     this.prepareNetwork,
+    this.applyWindowBrightness,
     this.autoStart = true,
   });
 
   final DeviceInfo self;
   final Future<void> Function()? prepareNetwork;
+
+  /// Called with the brightness the app is actually painted in, whenever it
+  /// changes. The desktop uses it to match the window frame, which GTK draws
+  /// and which would otherwise stay light under a dark theme. Null where the
+  /// platform owns the frame anyway, as on Android.
+  final Future<void> Function(Brightness)? applyWindowBrightness;
 
   /// Whether to start discovery and the pairing server on launch. Off in widget
   /// tests so no real sockets or timers are created.
@@ -58,15 +65,49 @@ class _SynchronizerAppState extends State<SynchronizerApp> {
         theme: buildTheme(_settings.scheme, Brightness.light),
         darkTheme: buildTheme(_settings.scheme, Brightness.dark),
         themeMode: _settings.themeMode,
-        home: HomeShell(
-          self: widget.self,
-          settings: _settings,
-          prepareNetwork: widget.prepareNetwork,
-          autoStart: widget.autoStart,
+        home: _WindowFrameSync(
+          apply: widget.applyWindowBrightness,
+          child: HomeShell(
+            self: widget.self,
+            settings: _settings,
+            prepareNetwork: widget.prepareNetwork,
+            autoStart: widget.autoStart,
+          ),
         ),
       ),
     );
   }
+}
+
+/// Reports the brightness the app is actually painted in to [apply].
+///
+/// It reads it from the inherited theme rather than from the settings, so it
+/// stays right for [ThemeMode.system] too, where the brightness comes from the
+/// platform and can change without any setting changing.
+class _WindowFrameSync extends StatefulWidget {
+  const _WindowFrameSync({required this.child, this.apply});
+
+  final Widget child;
+  final Future<void> Function(Brightness)? apply;
+
+  @override
+  State<_WindowFrameSync> createState() => _WindowFrameSyncState();
+}
+
+class _WindowFrameSyncState extends State<_WindowFrameSync> {
+  Brightness? _reported;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final brightness = Theme.of(context).brightness;
+    if (brightness == _reported) return;
+    _reported = brightness;
+    widget.apply?.call(brightness);
+  }
+
+  @override
+  Widget build(BuildContext context) => widget.child;
 }
 
 /// Lists devices found on the network and drives pairing in both directions:

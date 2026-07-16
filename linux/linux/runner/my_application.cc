@@ -10,6 +10,7 @@
 struct _MyApplication {
   GtkApplication parent_instance;
   char** dart_entrypoint_arguments;
+  FlMethodChannel* window_channel;
 };
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
@@ -17,6 +18,35 @@ G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
 // Called when first Flutter frame received.
 static void first_frame_cb(MyApplication* self, FlView* view) {
   gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));
+}
+
+// Handles calls on the "synchronizer/window" channel.
+//
+// The window frame - the header bar and its buttons - is drawn by GTK, not by
+// Flutter, so it does not follow the theme chosen inside the app on its own.
+// Dart tells us which way the app is currently painted and we ask GTK for the
+// matching variant of the system theme, which also covers GTK's own dialogs
+// (the folder chooser, for one).
+static void window_method_call_cb(FlMethodChannel* channel,
+                                  FlMethodCall* method_call,
+                                  gpointer user_data) {
+  g_autoptr(FlMethodResponse) response = nullptr;
+
+  if (g_strcmp0(fl_method_call_get_name(method_call), "setDark") == 0) {
+    FlValue* args = fl_method_call_get_args(method_call);
+    gboolean dark = fl_value_get_type(args) == FL_VALUE_TYPE_BOOL &&
+                    fl_value_get_bool(args);
+    g_object_set(gtk_settings_get_default(), "gtk-application-prefer-dark-theme",
+                 dark, nullptr);
+    response = FL_METHOD_RESPONSE(fl_method_success_response_new(nullptr));
+  } else {
+    response = FL_METHOD_RESPONSE(fl_method_not_implemented_response_new());
+  }
+
+  g_autoptr(GError) error = nullptr;
+  if (!fl_method_call_respond(method_call, response, &error)) {
+    g_warning("Failed to respond to window channel call: %s", error->message);
+  }
 }
 
 // Implements GApplication::activate.
@@ -45,11 +75,11 @@ static void my_application_activate(GApplication* application) {
   if (use_header_bar) {
     GtkHeaderBar* header_bar = GTK_HEADER_BAR(gtk_header_bar_new());
     gtk_widget_show(GTK_WIDGET(header_bar));
-    gtk_header_bar_set_title(header_bar, "synchronizer_desktop");
+    gtk_header_bar_set_title(header_bar, "Synchronizer");
     gtk_header_bar_set_show_close_button(header_bar, TRUE);
     gtk_window_set_titlebar(window, GTK_WIDGET(header_bar));
   } else {
-    gtk_window_set_title(window, "synchronizer_desktop");
+    gtk_window_set_title(window, "Synchronizer");
   }
 
   gtk_window_set_default_size(window, 1280, 720);
@@ -74,6 +104,15 @@ static void my_application_activate(GApplication* application) {
   gtk_widget_realize(GTK_WIDGET(view));
 
   fl_register_plugins(FL_PLUGIN_REGISTRY(view));
+
+  // Let Dart keep the window frame in step with the app's theme.
+  g_autoptr(FlStandardMethodCodec) codec = fl_standard_method_codec_new();
+  self->window_channel = fl_method_channel_new(
+      fl_engine_get_binary_messenger(fl_view_get_engine(view)),
+      "synchronizer/window", FL_METHOD_CODEC(codec));
+  fl_method_channel_set_method_call_handler(self->window_channel,
+                                            window_method_call_cb, self,
+                                            nullptr);
 
   gtk_widget_grab_focus(GTK_WIDGET(view));
 }
@@ -121,6 +160,7 @@ static void my_application_shutdown(GApplication* application) {
 static void my_application_dispose(GObject* object) {
   MyApplication* self = MY_APPLICATION(object);
   g_clear_pointer(&self->dart_entrypoint_arguments, g_strfreev);
+  g_clear_object(&self->window_channel);
   G_OBJECT_CLASS(my_application_parent_class)->dispose(object);
 }
 
