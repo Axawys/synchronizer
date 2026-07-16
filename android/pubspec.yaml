@@ -60,6 +60,7 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
@@ -102,3 +103,20 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+
+# Launcher icons, generated from the images tool/prepare_icons.py prepares out
+# of assets/icon.png. Regenerate with: dart run flutter_launcher_icons
+flutter_launcher_icons:
+  android: true
+  ios: false
+  # Edge-to-edge black artwork on nothing: a white layer behind it is what keeps
+  # it visible on a dark launcher, and the foreground is already inset to the
+  # adaptive safe zone so no corners get masked away.
+  image_path: "assets/icon_legacy.png"
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/icon_foreground.png"
+  # The foreground already carries the margin it needs; the default 16% would
+  # inset it a second time and shrink the artwork to nothing.
+  adaptive_icon_foreground_inset: 0
+  # Older Androids get a round variant rather than the square being cropped.
+  android_min_sdk_version: 21
