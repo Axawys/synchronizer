@@ -25,10 +25,14 @@ class MergePreviewPage extends StatefulWidget {
 }
 
 class _MergePreviewPageState extends State<MergePreviewPage> {
-  /// For each conflicting file that could be merged: one choice per hunk,
-  /// true meaning this device's version wins. Defaults to ours so a stray tap
-  /// on Apply never silently discards local work.
-  final Map<String, List<bool>> _hunkChoices = {};
+  /// For each conflicting file that could be merged: one choice per hunk, where
+  /// true means this device's version wins and null means the user has not said
+  /// yet.
+  ///
+  /// Undecided is a state of its own rather than a hidden default, so the
+  /// screen can show what is still waiting on the user and settle the rest
+  /// without pretending they were all looked at.
+  final Map<String, List<bool?>> _hunkChoices = {};
 
   /// For conflicts that cannot be merged at all, a single whole-file choice.
   final Map<String, bool> _keepLocal = {};
@@ -39,7 +43,7 @@ class _MergePreviewPageState extends State<MergePreviewPage> {
     for (final file in widget.preview.conflicts) {
       final merge = file.conflict!.merge;
       if (merge != null) {
-        _hunkChoices[file.path] = List.filled(merge.conflicts.length, true);
+        _hunkChoices[file.path] = List.filled(merge.conflicts.length, null);
       } else {
         _keepLocal[file.path] = true;
       }
@@ -59,10 +63,9 @@ class _MergePreviewPageState extends State<MergePreviewPage> {
             resolved.add(
                 ResolvedMerge(file.item, toLocal: !_keepLocal[file.path]!));
           } else {
-            final choices = _hunkChoices[file.path]!;
             var i = 0;
-            final lines =
-                merge.resolve((c) => choices[i++] ? c.ours : c.theirs);
+            final lines = merge.resolve(
+                (c) => _choiceFor(file.path, i++) ? c.ours : c.theirs);
             resolved.add(ResolvedMerge.merged(file.item, lines));
           }
         case _:
@@ -71,6 +74,20 @@ class _MergePreviewPageState extends State<MergePreviewPage> {
     }
     return resolved;
   }
+
+  /// What a hunk resolves to. An undecided one keeps this device's version:
+  /// leaving a decision unmade must never be the thing that loses local work.
+  bool _choiceFor(String path, int index) => _hunkChoices[path]![index] ?? true;
+
+  /// Hunks in [path] the user has not settled yet.
+  int _undecided(String path) =>
+      _hunkChoices[path]!.where((c) => c == null).length;
+
+  void _decide(String path, int index, bool mine) =>
+      setState(() => _hunkChoices[path]![index] = mine);
+
+  void _reopen(String path, int index) =>
+      setState(() => _hunkChoices[path]![index] = null);
 
   @override
   Widget build(BuildContext context) {
@@ -211,7 +228,9 @@ class _MergePreviewPageState extends State<MergePreviewPage> {
       leading: Icon(Icons.warning,
           size: 20, color: Theme.of(context).colorScheme.error),
       title: Text(file.path, style: const TextStyle(fontSize: 14)),
-      subtitle: Text(l10n.conflictingSpots(hunks.length)),
+      subtitle: Text(_undecided(file.path) == 0
+          ? l10n.allSpotsDecided(hunks.length)
+          : l10n.spotsToDecide(_undecided(file.path))),
       initiallyExpanded: true,
       children: [
         if (!file.conflict!.ancestorKnown) const _GuessedBaseNote(),
@@ -222,7 +241,30 @@ class _MergePreviewPageState extends State<MergePreviewPage> {
 
   Widget _hunkView(String path, int index, ConflictChunk hunk) {
     final l10n = AppLocalizations.of(context);
-    final keepMine = _hunkChoices[path]![index];
+    final choice = _hunkChoices[path]![index];
+
+    // Decided: the diff goes away, leaving one line saying what was chosen.
+    // What is left on screen is then exactly what still needs the user, which
+    // is the point of deciding a spot at all. Undo keeps it a decision rather
+    // than a commitment - nothing is written until Apply.
+    if (choice != null) {
+      return ListTile(
+        dense: true,
+        leading: Icon(Icons.check_circle,
+            size: 18, color: Theme.of(context).colorScheme.primary),
+        title: Text(
+          choice
+              ? l10n.spotKeptMine(hunk.ourStart)
+              : l10n.spotTookTheirs(hunk.theirStart),
+          style: const TextStyle(fontSize: 13),
+        ),
+        trailing: TextButton(
+          onPressed: () => _reopen(path, index),
+          child: Text(l10n.undo),
+        ),
+      );
+    }
+
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
       child: Column(
@@ -241,15 +283,20 @@ class _MergePreviewPageState extends State<MergePreviewPage> {
             newStart: hunk.ourStart,
           ),
           const SizedBox(height: 8),
-          SegmentedButton<bool>(
-            style: const ButtonStyle(visualDensity: VisualDensity.compact),
-            segments: [
-              ButtonSegment(value: true, label: Text(l10n.keepMine)),
-              ButtonSegment(value: false, label: Text(l10n.takeTheirs)),
+          Row(
+            children: [
+              FilledButton.tonalIcon(
+                onPressed: () => _decide(path, index, true),
+                icon: const Icon(Icons.arrow_circle_down, size: 18),
+                label: Text(l10n.takeMine),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                onPressed: () => _decide(path, index, false),
+                icon: const Icon(Icons.arrow_circle_up, size: 18),
+                label: Text(l10n.takeTheirs),
+              ),
             ],
-            selected: {keepMine},
-            onSelectionChanged: (s) =>
-                setState(() => _hunkChoices[path]![index] = s.first),
           ),
         ],
       ),

@@ -163,6 +163,84 @@ void main() {
     expect(utf8.decode(resolved.content!), joinLines(['theirs', 'a', 'ours']));
   });
 
+  testWidgets('a decided spot leaves the diff, and can be brought back',
+      (tester) async {
+    final merge = merge3(['base'], ['mine'], ['theirs']);
+    final conflictItem = item('note.md', MergeKind.conflict);
+    final preview = SyncPreview(
+      files: [
+        FilePreview(
+          item: conflictItem,
+          kind: PreviewKind.conflict,
+          side: PreviewSide.both,
+          conflict: MergedConflict(
+            item: conflictItem,
+            merge: merge,
+            ourLines: const ['mine'],
+            theirLines: const ['theirs'],
+          ),
+        ),
+      ],
+      folders: const [],
+    );
+
+    await show(tester, preview);
+    expect(find.text('+ mine'), findsOneWidget);
+    expect(find.textContaining('1 spot to decide'), findsOneWidget);
+
+    await tester.tap(find.text('Take mine'));
+    await tester.pumpAndSettle();
+
+    // The point of deciding: the spot stops taking up the screen, so what is
+    // left is what still needs the user.
+    expect(find.text('+ mine'), findsNothing);
+    expect(find.text('− theirs'), findsNothing);
+    expect(find.textContaining('Line 1: your version'), findsOneWidget);
+    expect(find.textContaining('spot decided'), findsOneWidget);
+
+    // Nothing is written until Apply, so a decision must be reversible.
+    await tester.tap(find.text('Undo'));
+    await tester.pumpAndSettle();
+    expect(find.text('+ mine'), findsOneWidget);
+    expect(find.textContaining('1 spot to decide'), findsOneWidget);
+  });
+
+  testWidgets('deciding some spots and leaving the rest still applies whole',
+      (tester) async {
+    // Three spots, separated by untouched lines so each is its own conflict.
+    final merge = merge3(
+      ['a', 'keep', 'b', 'keep too', 'c'],
+      ['mine 1', 'keep', 'mine 2', 'keep too', 'mine 3'],
+      ['theirs 1', 'keep', 'theirs 2', 'keep too', 'theirs 3'],
+    );
+    expect(merge.conflicts, hasLength(3));
+
+    final conflictItem = item('note.md', MergeKind.conflict);
+    final preview = SyncPreview(
+      files: [
+        FilePreview(
+          item: conflictItem,
+          kind: PreviewKind.conflict,
+          side: PreviewSide.both,
+          conflict: MergedConflict(item: conflictItem, merge: merge),
+        ),
+      ],
+      folders: const [],
+    );
+
+    final applied = await _openAndApply(tester, preview, beforeApply: () async {
+      // Take theirs for the middle spot only, and leave the other two alone.
+      await tester.tap(find.text('Take theirs').at(1));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('2 spots to decide'), findsOneWidget);
+    });
+
+    // The decided spot went their way; the two left alone kept ours, and the
+    // untouched lines merged without anyone being asked.
+    expect(utf8.decode(applied.single.content!),
+        joinLines(['mine 1', 'keep', 'theirs 2', 'keep too', 'mine 3']));
+  });
+
   testWidgets('choosing per hunk decides what a conflict becomes',
       (tester) async {
     // One conflicting spot: ours vs theirs.
