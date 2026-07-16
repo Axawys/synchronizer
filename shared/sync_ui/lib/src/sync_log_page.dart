@@ -73,7 +73,9 @@ class _EntryTile extends StatelessWidget {
     return ListTile(
       leading: Icon(
         failed ? Icons.error_outline : Icons.check_circle_outline,
-        color: failed ? Colors.red : Colors.teal,
+        color: failed
+            ? Theme.of(context).colorScheme.error
+            : Theme.of(context).colorScheme.primary,
       ),
       title: Text('${entry.folder} — ${entry.peerName}'),
       subtitle: Text(_summary()),

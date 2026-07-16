@@ -2,15 +2,20 @@ import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:sync_net/sync_net.dart';
 
+import 'app_settings.dart';
 import 'app_shell.dart';
 import 'storage.dart';
 import 'sync_log_page.dart';
 import 'sync_page.dart';
+import 'theme.dart';
 
 /// Root widget for both apps. The only per-platform difference is
 /// [prepareNetwork]: Android passes a hook that grabs the multicast lock before
 /// discovery starts; the desktop passes nothing.
-class SynchronizerApp extends StatelessWidget {
+///
+/// It owns [AppSettings] because the palette and light/dark choice have to be
+/// applied above [MaterialApp], where the themes are declared.
+class SynchronizerApp extends StatefulWidget {
   const SynchronizerApp({
     super.key,
     required this.self,
@@ -26,26 +31,39 @@ class SynchronizerApp extends StatelessWidget {
   final bool autoStart;
 
   @override
+  State<SynchronizerApp> createState() => _SynchronizerAppState();
+}
+
+class _SynchronizerAppState extends State<SynchronizerApp> {
+  final AppSettings _settings = AppSettings();
+
+  @override
+  void initState() {
+    super.initState();
+    _settings.load();
+  }
+
+  @override
+  void dispose() {
+    _settings.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Synchronizer',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.teal),
-        useMaterial3: true,
-      ),
-      darkTheme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: Colors.teal,
-          brightness: Brightness.dark,
+    return ListenableBuilder(
+      listenable: _settings,
+      builder: (context, _) => MaterialApp(
+        title: 'Synchronizer',
+        theme: buildTheme(_settings.scheme, Brightness.light),
+        darkTheme: buildTheme(_settings.scheme, Brightness.dark),
+        themeMode: _settings.themeMode,
+        home: HomeShell(
+          self: widget.self,
+          settings: _settings,
+          prepareNetwork: widget.prepareNetwork,
+          autoStart: widget.autoStart,
         ),
-        useMaterial3: true,
-      ),
-      // Follow the system light/dark setting automatically.
-      themeMode: ThemeMode.system,
-      home: HomeShell(
-        self: self,
-        prepareNetwork: prepareNetwork,
-        autoStart: autoStart,
       ),
     );
   }
@@ -247,7 +265,8 @@ class _DevicesPageState extends State<DevicesPage> {
                   title: Text(device.name),
                   subtitle: Text('${device.address ?? 'unknown'}:${device.port}'),
                   trailing: paired
-                      ? const Icon(Icons.link, color: Colors.teal)
+                      ? Icon(Icons.link,
+                          color: Theme.of(context).colorScheme.primary)
                       : const Icon(Icons.chevron_right),
                   onTap: () => _openDevice(device),
                 );

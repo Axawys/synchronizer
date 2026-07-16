@@ -6,7 +6,9 @@
 /// rather than duplicated.
 library;
 
+export 'src/app_settings.dart';
 export 'src/app_shell.dart';
+export 'src/autostart.dart';
 export 'src/home.dart';
 export 'src/prefs_trust_store.dart';
 export 'src/settings_page.dart';
@@ -14,3 +16,4 @@ export 'src/shared_folders_page.dart';
 export 'src/storage.dart';
 export 'src/sync_log_page.dart';
 export 'src/sync_page.dart';
+export 'src/theme.dart';

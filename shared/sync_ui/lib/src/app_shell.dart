@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:sync_net/sync_net.dart';
 
+import 'app_settings.dart';
 import 'home.dart';
 import 'prefs_trust_store.dart';
 import 'settings_page.dart';
@@ -31,11 +32,13 @@ class HomeShell extends StatefulWidget {
   const HomeShell({
     super.key,
     required this.self,
+    required this.settings,
     this.prepareNetwork,
     this.autoStart = true,
   });
 
   final DeviceInfo self;
+  final AppSettings settings;
   final Future<void> Function()? prepareNetwork;
   final bool autoStart;
 
@@ -77,7 +80,7 @@ class _HomeShellState extends State<HomeShell> {
           autoStart: widget.autoStart,
         ),
         SharedFoldersPage(folders: _folders),
-        const SettingsPage(),
+        SettingsPage(settings: widget.settings),
       ],
     );
 

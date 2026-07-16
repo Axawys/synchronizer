@@ -312,7 +312,8 @@ class _MergeDialogState extends State<_MergeDialog> {
           shrinkWrap: true,
           children: [
             if (merge.conflicts.isNotEmpty) ...[
-              _heading(context, 'Conflicts', Icons.warning, Colors.red),
+              _heading(context, 'Conflicts', Icons.warning,
+                  Theme.of(context).colorScheme.error),
               const Padding(
                 padding: EdgeInsets.only(left: 26, bottom: 4),
                 child: Text('Changed on both sides. Choose which to keep:',
@@ -323,7 +324,7 @@ class _MergeDialogState extends State<_MergeDialog> {
             _fileList(context, 'Download from ${widget.deviceName}',
                 Icons.download, Colors.blue, merge.pulls),
             _fileList(context, 'Upload to ${widget.deviceName}', Icons.upload,
-                Colors.teal, merge.pushes),
+                Theme.of(context).colorScheme.primary, merge.pushes),
           ],
         ),
       ),
