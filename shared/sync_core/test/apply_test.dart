@@ -48,6 +48,48 @@ void main() {
       expect(File('${root.path}/gone.md').existsSync(), isFalse);
     });
 
+    test('removes a folder once its last file is deleted', () async {
+      File('${root.path}/vault/notes/deep.md')
+        ..createSync(recursive: true)
+        ..writeAsStringSync('x');
+
+      await applyChanges(
+        root,
+        ChangeSet([
+          Change(
+              kind: ChangeKind.deleted,
+              path: 'vault/notes/deep.md',
+              before: entry('vault/notes/deep.md', 'x')),
+        ]),
+        (_) async => const <int>[],
+      );
+
+      expect(Directory('${root.path}/vault/notes').existsSync(), isFalse);
+      expect(Directory('${root.path}/vault').existsSync(), isFalse);
+      expect(root.existsSync(), isTrue, reason: 'the sync root itself stays');
+    });
+
+    test('keeps a folder that still holds other files', () async {
+      File('${root.path}/vault/gone.md')
+        ..createSync(recursive: true)
+        ..writeAsStringSync('x');
+      File('${root.path}/vault/stays.md').writeAsStringSync('y');
+
+      await applyChanges(
+        root,
+        ChangeSet([
+          Change(
+              kind: ChangeKind.deleted,
+              path: 'vault/gone.md',
+              before: entry('vault/gone.md', 'x')),
+        ]),
+        (_) async => const <int>[],
+      );
+
+      expect(Directory('${root.path}/vault').existsSync(), isTrue);
+      expect(File('${root.path}/vault/stays.md').existsSync(), isTrue);
+    });
+
     test('leaves no temporary files behind', () async {
       final changes = ChangeSet([
         Change(kind: ChangeKind.added, path: 'a.md', after: entry('a.md', 'a')),

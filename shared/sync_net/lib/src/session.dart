@@ -373,6 +373,9 @@ Future<void> _serveDelete(
 
   final file = File(resolved);
   if (file.existsSync()) await file.delete();
+  // A folder deleted on the peer arrives as deletions of the files inside it;
+  // clear out the directories that are now empty so the folder really goes.
+  await removeEmptyParents(resolved, root);
   conn.send({'type': SessionType.ack, 'path': rel});
 }
 

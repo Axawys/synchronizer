@@ -1,3 +1,6 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:sync_net/sync_net.dart';
 import 'package:test/test.dart';
 
@@ -40,6 +43,15 @@ void main() {
       expect(a, hasLength(32));
       expect(a, matches(RegExp(r'^[0-9a-f]{32}$')));
       expect(a, isNot(b));
+    });
+
+    test('randomFriendlyName is a readable two-word name', () {
+      final name = DeviceInfo.randomFriendlyName();
+      expect(name, matches(RegExp(r'^[A-Z][a-z]+ [A-Z][a-z]+$')));
+
+      // Enough variety that two devices are unlikely to collide.
+      final names = {for (var i = 0; i < 50; i++) DeviceInfo.randomFriendlyName()};
+      expect(names.length, greaterThan(10));
     });
 
     test('identity is the id, not the name', () {
@@ -110,7 +122,7 @@ void main() {
       expect(alice.current.any((d) => d.id == 'alice'), isFalse);
     });
 
-    test('a peer that goes silent is pruned', () async {
+    test('a peer that shuts down cleanly disappears at once', () async {
       await alice.start();
       await bob.start();
 
@@ -118,13 +130,47 @@ void main() {
           .firstWhere((list) => list.any((d) => d.id == 'bob'))
           .timeout(const Duration(seconds: 5));
 
-      await bob.stop();
-
       final bobGone = alice.peers.firstWhere(
         (list) => list.every((d) => d.id != 'bob'),
       );
-      await bobGone.timeout(const Duration(seconds: 5));
+      await bob.stop(); // sends the goodbye
+
+      // Well inside staleAfter, so this can only be the goodbye taking effect.
+      await bobGone.timeout(const Duration(milliseconds: 300));
       expect(alice.current.any((d) => d.id == 'bob'), isFalse);
+    });
+
+    test('a peer that is killed without a goodbye is pruned on timeout',
+        () async {
+      await alice.start();
+
+      // Announce a device once from a raw socket and then go quiet, the way a
+      // force-closed app or a dropped Wi-Fi connection would.
+      final socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+      socket.send(
+        utf8.encode(jsonEncode({
+          'magic': 'synchronizer/1',
+          'type': 'announce',
+          'device': const DeviceInfo(
+            id: 'ghost',
+            name: 'Ghost',
+            platform: DevicePlatform.android,
+            port: 47800,
+          ).toAnnouncement(),
+        })),
+        InternetAddress(fastConfig.multicastAddress),
+        fastConfig.port,
+      );
+      addTearDown(socket.close);
+
+      await alice.peers
+          .firstWhere((list) => list.any((d) => d.id == 'ghost'))
+          .timeout(const Duration(seconds: 5));
+
+      final gone =
+          alice.peers.firstWhere((list) => list.every((d) => d.id != 'ghost'));
+      await gone.timeout(const Duration(seconds: 5));
+      expect(alice.current.any((d) => d.id == 'ghost'), isFalse);
     });
   });
 }

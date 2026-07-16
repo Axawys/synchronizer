@@ -76,6 +76,7 @@ class _DevicesPageState extends State<DevicesPage> {
   final SharedFolders _sharedFolders = SharedFolders();
   late final DiscoveryService _discovery;
   late final PeerServer _pairingServer;
+  AppLifecycleListener? _lifecycle;
 
   List<DeviceInfo> _devices = const [];
   Set<String> _trustedIds = {};
@@ -91,7 +92,21 @@ class _DevicesPageState extends State<DevicesPage> {
       port: widget.self.port,
       directories: _sharedFolders,
     );
-    if (widget.autoStart) _init();
+    if (widget.autoStart) {
+      // Closing the app should take this device off other people's lists right
+      // away, rather than leaving it there until the staleness timeout.
+      _lifecycle = AppLifecycleListener(onDetach: _shutdownNetworking);
+      _init();
+    }
+  }
+
+  bool _networkingStopped = false;
+
+  void _shutdownNetworking() {
+    if (_networkingStopped) return;
+    _networkingStopped = true;
+    _discovery.stop(); // announces our goodbye
+    _pairingServer.stop();
   }
 
   Future<void> _init() async {
@@ -113,8 +128,8 @@ class _DevicesPageState extends State<DevicesPage> {
 
   @override
   void dispose() {
-    _discovery.stop();
-    _pairingServer.stop();
+    _lifecycle?.dispose();
+    _shutdownNetworking();
     _sharedFolders.dispose();
     super.dispose();
   }

@@ -21,7 +21,11 @@ class DeviceIdentity {
       await prefs.setString('device_id', id);
     }
 
-    final name = prefs.getString('device_name') ?? _defaultName();
+    var name = prefs.getString('device_name');
+    if (name == null) {
+      name = _defaultName();
+      await prefs.setString('device_name', name);
+    }
 
     return DeviceInfo(
       id: id,
@@ -31,8 +35,13 @@ class DeviceIdentity {
     );
   }
 
+  /// The hostname identifies the machine well on a desktop; only if there is no
+  /// usable one do we fall back to a generated name.
   static String _defaultName() {
-    final host = Platform.localHostname;
-    return host.isEmpty ? 'Linux device' : host;
+    final host = Platform.localHostname.trim();
+    if (host.isEmpty || host == 'localhost') {
+      return DeviceInfo.randomFriendlyName();
+    }
+    return host;
   }
 }

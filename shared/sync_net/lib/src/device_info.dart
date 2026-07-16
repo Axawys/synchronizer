@@ -81,6 +81,31 @@ class DeviceInfo {
     return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
   }
 
+  /// A readable fallback name for when a device cannot report its real model,
+  /// e.g. "Calm Otter". Memorable enough to pick out of a list, which a random
+  /// id would not be. The caller persists it so the name stays put.
+  static String randomFriendlyName() {
+    final rng = Random.secure();
+    final adjective = _adjectives[rng.nextInt(_adjectives.length)];
+    final animal = _animals[rng.nextInt(_animals.length)];
+    return '$adjective $animal';
+  }
+
+  static const _adjectives = [
+    'Amber', 'Bold', 'Brave', 'Bright', 'Calm', 'Clever', 'Copper', 'Curious',
+    'Eager', 'Gentle', 'Happy', 'Jolly', 'Keen', 'Lively', 'Lucky', 'Merry',
+    'Mellow', 'Noble', 'Quick', 'Quiet', 'Silver', 'Snug', 'Sunny', 'Swift',
+    'Tidy', 'Warm', 'Wise', 'Zesty',
+  ];
+
+  static const _animals = [
+    'Badger', 'Beaver', 'Bison', 'Cricket', 'Dolphin', 'Falcon', 'Ferret',
+    'Finch', 'Fox', 'Gecko', 'Heron', 'Ibex', 'Jackdaw', 'Lemur', 'Lynx',
+    'Magpie', 'Marten', 'Moth', 'Newt', 'Otter', 'Owl', 'Panda', 'Puffin',
+    'Raven', 'Robin', 'Seal', 'Sparrow', 'Stoat', 'Tapir', 'Walrus', 'Weasel',
+    'Wombat',
+  ];
+
   @override
   bool operator ==(Object other) => other is DeviceInfo && other.id == id;
 

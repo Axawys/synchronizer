@@ -35,8 +35,35 @@ Future<void> applyChanges(
         await temp.rename(target.path);
       case ChangeKind.deleted:
         if (target.existsSync()) await target.delete();
+        await removeEmptyParents(target.path, root.path);
     }
 
     onProgress?.call(++applied, changes.length);
+  }
+}
+
+/// After a file is removed, deletes the directories that just became empty, up
+/// to but never including [rootPath].
+///
+/// A manifest only lists files, so deleting a folder reaches the other device
+/// as the deletion of the files inside it. Without this, the folder itself
+/// would linger there as an empty husk; with it, removing a folder on one
+/// device removes it on the other.
+Future<void> removeEmptyParents(String filePath, String rootPath) async {
+  final root = p.normalize(p.absolute(rootPath));
+  var dir = Directory(p.dirname(p.normalize(p.absolute(filePath))));
+
+  while (p.isWithin(root, dir.path)) {
+    if (!dir.existsSync()) {
+      dir = dir.parent;
+      continue;
+    }
+    if (dir.listSync().isNotEmpty) break;
+    try {
+      await dir.delete();
+    } on FileSystemException {
+      break; // Busy or not ours to remove; leave it be.
+    }
+    dir = dir.parent;
   }
 }

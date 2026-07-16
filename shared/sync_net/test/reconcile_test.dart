@@ -197,6 +197,53 @@ void main() {
     expect(File('${remote.path}/bad.md').existsSync(), isFalse);
   });
 
+  test('a folder deleted here is removed on the peer too', () async {
+    // Both sides agree on a vault holding a subfolder.
+    for (final root in [local, remote]) {
+      File('${root.path}/notes/deep.md')
+        ..createSync(recursive: true)
+        ..writeAsStringSync('x');
+      File('${root.path}/keep.md').writeAsStringSync('k');
+    }
+    final base = await Manifest.scan(local);
+
+    // Delete the whole subfolder locally.
+    Directory('${local.path}/notes').deleteSync(recursive: true);
+
+    final client = await connect();
+    addTearDown(client.close);
+
+    final merge = await computeMerge(client, 'notes', local, base);
+    await applyMerge(
+        client, 'notes', local, merge.items.map(ResolvedMerge.natural).toList());
+
+    expect(Directory('${remote.path}/notes').existsSync(), isFalse,
+        reason: 'the folder itself should be gone, not just its files');
+    expect(File('${remote.path}/keep.md').existsSync(), isTrue);
+    await expectSidesMatch();
+  });
+
+  test('a folder deleted on the peer is removed here too', () async {
+    for (final root in [local, remote]) {
+      File('${root.path}/notes/deep.md')
+        ..createSync(recursive: true)
+        ..writeAsStringSync('x');
+    }
+    final base = await Manifest.scan(local);
+
+    Directory('${remote.path}/notes').deleteSync(recursive: true);
+
+    final client = await connect();
+    addTearDown(client.close);
+
+    final merge = await computeMerge(client, 'notes', local, base);
+    await applyMerge(
+        client, 'notes', local, merge.items.map(ResolvedMerge.natural).toList());
+
+    expect(Directory('${local.path}/notes').existsSync(), isFalse);
+    expect(local.existsSync(), isTrue, reason: 'the sync root itself stays');
+  });
+
   test('automatic conflict resolution takes the newer side', () async {
     final older = DateTime.now().subtract(const Duration(hours: 1));
 

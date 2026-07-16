@@ -147,4 +147,7 @@ Future<List<int>> _readLocal(Directory root, String path) =>
 Future<void> _deleteLocal(Directory root, String path) async {
   final file = _localFile(root, path);
   if (file.existsSync()) await file.delete();
+  // Drop folders emptied by the deletion, so a folder removed on the other
+  // device disappears here too rather than lingering empty.
+  await removeEmptyParents(file.path, root.path);
 }

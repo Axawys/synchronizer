@@ -10,8 +10,8 @@ class DiscoveryConfig {
   const DiscoveryConfig({
     this.multicastAddress = '239.255.42.99',
     this.port = 47811,
-    this.announceInterval = const Duration(seconds: 3),
-    this.staleAfter = const Duration(seconds: 10),
+    this.announceInterval = const Duration(seconds: 2),
+    this.staleAfter = const Duration(seconds: 6),
   });
 
   /// Administratively-scoped multicast group. Traffic to it stays on the local
@@ -31,8 +31,13 @@ class DiscoveryConfig {
 ///
 /// The exchange is small: every device periodically multicasts an [DeviceInfo]
 /// announcement, and a device joining the network multicasts a query so it does
-/// not have to wait a full interval to learn who is already present. Peers that
-/// go quiet for [DiscoveryConfig.staleAfter] drop off the list.
+/// not have to wait a full interval to learn who is already present.
+///
+/// A device leaves the list two ways: it says goodbye when it shuts down
+/// cleanly (immediate), or it simply goes quiet and is pruned after
+/// [DiscoveryConfig.staleAfter] (the backstop for an app that was killed, lost
+/// Wi-Fi, or crashed). So the list only ever shows devices actually reachable
+/// right now, which is what makes tapping one meaningful.
 ///
 /// This deliberately avoids mDNS/Avahi: it needs no native plugin and the
 /// packet format is ours, which keeps the desktop and phone behaving
@@ -94,6 +99,10 @@ class DiscoveryService {
     final socket = _socket;
     final group = _group;
     if (socket != null && group != null) {
+      // Say goodbye so peers drop us at once instead of waiting out
+      // [DiscoveryConfig.staleAfter]. A device that is killed outright cannot
+      // send this, which is exactly what the staleness timeout is for.
+      _sendBye();
       try {
         socket.leaveMulticast(group);
       } on OSError {
@@ -127,7 +136,17 @@ class DiscoveryService {
         _announce();
       case 'announce':
         _onAnnounce(message, datagram.address.address);
+      case 'bye':
+        _onBye(message);
     }
+  }
+
+  /// A peer that is shutting down cleanly. Drop it now so it stops being
+  /// offered for syncing the moment its app closes.
+  void _onBye(Map<String, Object?> message) {
+    final id = message['id'];
+    if (id is! String || id == self.id) return;
+    if (_peers.remove(id) != null) _emit();
   }
 
   void _onAnnounce(Map<String, Object?> message, String sourceAddress) {
@@ -163,6 +182,10 @@ class DiscoveryService {
 
   void _sendQuery() {
     _send({'magic': _magic, 'type': 'query'});
+  }
+
+  void _sendBye() {
+    _send({'magic': _magic, 'type': 'bye', 'id': self.id});
   }
 
   void _send(Map<String, Object?> message) {
