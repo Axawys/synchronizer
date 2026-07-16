@@ -197,6 +197,109 @@ void main() {
     expect(utf8.decode(taken.single.content!), 'theirs');
   });
 
+  testWidgets('lines are numbered on the side they exist on', (tester) async {
+    final preview = SyncPreview(
+      files: [
+        FilePreview(
+          item: item('note.md', MergeKind.pullToLocal),
+          kind: PreviewKind.update,
+          side: PreviewSide.here,
+          lines: const [
+            DiffLine(DiffOp.equal, 'one'),
+            DiffLine(DiffOp.delete, 'two'),
+            DiffLine(DiffOp.insert, 'zwei'),
+            DiffLine(DiffOp.equal, 'three'),
+          ],
+        ),
+      ],
+      folders: const [],
+    );
+
+    await show(tester, preview);
+    await tester.tap(find.text('note.md'));
+    await tester.pumpAndSettle();
+
+    // Both files have a line 1 and, after the swap, a line 3.
+    expect(find.text('1'), findsNWidgets(2));
+    expect(find.text('3'), findsNWidgets(2));
+    // The removed line is line 2 of the old file only; the added one is line 2
+    // of the new file only. Neither exists on the other side, so each shows a
+    // single number rather than being invented a place it never had.
+    expect(find.text('2'), findsNWidgets(2));
+    expect(find.text('− two'), findsOneWidget);
+    expect(find.text('+ zwei'), findsOneWidget);
+  });
+
+  testWidgets('untouched stretches are folded away, and say how many',
+      (tester) async {
+    final preview = SyncPreview(
+      files: [
+        FilePreview(
+          item: item('note.md', MergeKind.pullToLocal),
+          kind: PreviewKind.update,
+          side: PreviewSide.here,
+          lines: [
+            const DiffLine(DiffOp.insert, 'top'),
+            for (var i = 0; i < 20; i++) DiffLine(DiffOp.equal, 'filler $i'),
+            const DiffLine(DiffOp.insert, 'bottom'),
+          ],
+        ),
+      ],
+      folders: const [],
+    );
+
+    await show(tester, preview);
+    await tester.tap(find.text('note.md'));
+    await tester.pumpAndSettle();
+
+    // Both changes are shown with context around them...
+    expect(find.text('+ top'), findsOneWidget);
+    expect(find.text('+ bottom'), findsOneWidget);
+    expect(find.text('  filler 0'), findsOneWidget);
+    expect(find.text('  filler 19'), findsOneWidget);
+    // ...and the middle is folded rather than dropped without a word.
+    expect(find.text('  filler 10'), findsNothing);
+    expect(find.textContaining('14 unchanged lines'), findsOneWidget);
+
+    // Numbering survives the fold: the last line is still line 22.
+    expect(find.text('22'), findsOneWidget);
+  });
+
+  testWidgets('a conflict is numbered from where it sits in each file',
+      (tester) async {
+    // We added a line above the conflict and they did not, so the same
+    // conflict is at line 4 here and line 3 there.
+    final merge = merge3(
+      ['a', 'b', 'x'],
+      ['a', 'added', 'b', 'mine'],
+      ['a', 'b', 'theirs'],
+    );
+    final conflictItem = item('note.md', MergeKind.conflict);
+    final preview = SyncPreview(
+      files: [
+        FilePreview(
+          item: conflictItem,
+          kind: PreviewKind.conflict,
+          side: PreviewSide.both,
+          conflict: MergedConflict(
+            item: conflictItem,
+            merge: merge,
+            ourLines: const ['a', 'added', 'b', 'mine'],
+            theirLines: const ['a', 'b', 'theirs'],
+          ),
+        ),
+      ],
+      folders: const [],
+    );
+
+    await show(tester, preview);
+
+    expect(find.text('+ mine'), findsOneWidget);
+    expect(find.text('− theirs'), findsOneWidget);
+    expect(find.text('4'), findsOneWidget, reason: 'our line number');
+    expect(find.text('3'), findsOneWidget, reason: 'their line number');
+  });
+
   testWidgets('a conflict that cannot be merged still shows both versions',
       (tester) async {
     // Nothing to merge against, but the text is readable, so the choice is not

@@ -19,6 +19,8 @@ final class ConflictChunk extends MergeChunk {
     required this.base,
     required this.ours,
     required this.theirs,
+    this.ourStart = 1,
+    this.theirStart = 1,
   });
 
   /// How the lines looked at the last sync.
@@ -29,6 +31,15 @@ final class ConflictChunk extends MergeChunk {
 
   /// How they look on the other device.
   final List<String> theirs;
+
+  /// Where [ours] begins in this device's file, counting from 1, and likewise
+  /// [theirStart] in the other device's file.
+  ///
+  /// A merge rebuilds the file, so a chunk on its own has no idea where it came
+  /// from. Tracking it while merging is the only way to tell the user which
+  /// lines a conflict is about rather than showing them floating text.
+  final int ourStart;
+  final int theirStart;
 }
 
 /// The outcome of merging one file.
@@ -88,6 +99,11 @@ TextMergeResult merge3(
   var oi = 0;
   var ti = 0;
 
+  // Where we are in each side's own file, counting from 1, so a conflict can
+  // say which of their lines it means.
+  var ourLine = 1;
+  var theirLine = 1;
+
   while (oi < ourRegions.length || ti < theirRegions.length) {
     final nextOur = oi < ourRegions.length ? ourRegions[oi].start : null;
     final nextTheir = ti < theirRegions.length ? theirRegions[ti].start : null;
@@ -96,9 +112,12 @@ TextMergeResult merge3(
       if (nextTheir != null) nextTheir,
     ].reduce((a, b) => a < b ? a : b);
 
-    // Untouched base lines leading up to the next change.
+    // Untouched base lines leading up to the next change. Neither side moved
+    // them, so both files hold every one of them.
     while (baseIndex < start) {
       stable.add(base[baseIndex++]);
+      ourLine++;
+      theirLine++;
     }
 
     // Pull in every region either side has that overlaps this one, so two
@@ -127,19 +146,31 @@ TextMergeResult merge3(
     final ourLines = _sideLines(base, ourGroup, start, end);
     final theirLines = _sideLines(base, theirGroup, start, end);
 
+    // A side that left the range alone still holds the base lines for it, so
+    // its line count advances by the range, not by what the other side wrote.
     if (theirGroup.isEmpty) {
       stable.addAll(ourLines); // only we touched it
+      ourLine += ourLines.length;
+      theirLine += end - start;
     } else if (ourGroup.isEmpty) {
       stable.addAll(theirLines); // only they touched it
+      ourLine += end - start;
+      theirLine += theirLines.length;
     } else if (_sameLines(ourLines, theirLines)) {
       stable.addAll(ourLines); // both made the same edit
+      ourLine += ourLines.length;
+      theirLine += theirLines.length;
     } else {
       flushStable();
       chunks.add(ConflictChunk(
         base: base.sublist(start, end),
         ours: ourLines,
         theirs: theirLines,
+        ourStart: ourLine,
+        theirStart: theirLine,
       ));
+      ourLine += ourLines.length;
+      theirLine += theirLines.length;
     }
 
     baseIndex = end;

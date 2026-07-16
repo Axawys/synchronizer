@@ -105,6 +105,68 @@ void main() {
       expect((result.chunks.last as MergedLines).lines, ['tail']);
     });
 
+    group('a conflict knows where it is in each file', () {
+      test('counting the lines each side actually has', () {
+        //            ours            theirs
+        // line 1     keep            keep
+        // line 2     ours            theirs   <- the conflict
+        // line 3     tail            tail
+        final result = merge3(
+          ['keep', 'x', 'tail'],
+          ['keep', 'ours', 'tail'],
+          ['keep', 'theirs', 'tail'],
+        );
+
+        final conflict = result.conflicts.single;
+        expect(conflict.ourStart, 2);
+        expect(conflict.theirStart, 2);
+      });
+
+      test('after edits that shifted the two files by different amounts', () {
+        // We added two lines above; they added none. The same conflict
+        // therefore sits at a different line number on each device, which is
+        // exactly what a shared counter would get wrong.
+        final result = merge3(
+          ['head', 'x'],
+          ['head', 'ours 1', 'ours 2', 'ours'],
+          ['head', 'theirs'],
+        );
+
+        final conflict = result.conflicts.single;
+        expect(conflict.ours, ['ours 1', 'ours 2', 'ours']);
+        expect(conflict.ourStart, 2, reason: 'right after "head"');
+        expect(conflict.theirStart, 2);
+      });
+
+      test('when one side is untouched, it still counts its own base lines',
+          () {
+        // They changed nothing at the top, so their line 4 is base line 4 -
+        // not wherever our added lines pushed it to.
+        final result = merge3(
+          ['a', 'b', 'c', 'x'],
+          ['a', 'added', 'b', 'c', 'ours'],
+          ['a', 'b', 'c', 'theirs'],
+        );
+
+        final conflict = result.conflicts.single;
+        expect(conflict.ourStart, 5, reason: 'our extra line pushed it down');
+        expect(conflict.theirStart, 4);
+      });
+
+      test('a second conflict is numbered from after the first', () {
+        final result = merge3(
+          ['x', 'keep', 'y'],
+          ['ours 1', 'keep', 'ours 2'],
+          ['theirs 1', 'keep', 'theirs 2'],
+        );
+
+        expect(result.conflicts, hasLength(2));
+        expect(result.conflicts.first.ourStart, 1);
+        expect(result.conflicts.last.ourStart, 3);
+        expect(result.conflicts.last.theirStart, 3);
+      });
+    });
+
     test('resolve picks a side per conflict and keeps the merged rest', () {
       // Untouched lines separate the edits, so only the middle is in dispute:
       // our change to the top and their change to the bottom both stand.

@@ -222,10 +222,18 @@ class _MergePreviewPageState extends State<MergePreviewPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _DiffView([
-            for (final line in hunk.ours) DiffLine(DiffOp.insert, line),
-            for (final line in hunk.theirs) DiffLine(DiffOp.delete, line),
-          ], insertLabel: 'mine', deleteLabel: 'theirs'),
+          // A conflict is a fragment, so it is numbered from where it sits in
+          // each file rather than from 1.
+          _DiffView(
+            [
+              for (final line in hunk.theirs) DiffLine(DiffOp.delete, line),
+              for (final line in hunk.ours) DiffLine(DiffOp.insert, line),
+            ],
+            insertLabel: 'mine',
+            deleteLabel: 'theirs',
+            oldStart: hunk.theirStart,
+            newStart: hunk.ourStart,
+          ),
           const SizedBox(height: 8),
           SegmentedButton<bool>(
             style: const ButtonStyle(visualDensity: VisualDensity.compact),
@@ -288,19 +296,58 @@ class _GuessedBaseNote extends StatelessWidget {
   }
 }
 
-/// The lines a change adds and removes, rendered like a diff.
+/// One line as it will be shown: the change, plus its line number on each side.
+/// A number is null where the line does not exist on that side.
+class _NumberedLine {
+  const _NumberedLine(this.line, this.oldNo, this.newNo);
+  final DiffLine line;
+  final int? oldNo;
+  final int? newNo;
+}
+
+/// A run of unchanged lines that is not worth showing, and how many.
+class _Skipped {
+  const _Skipped(this.count);
+  final int count;
+}
+
+/// The lines a change adds and removes, rendered like a diff: numbered, removed
+/// in red with a minus, added in green with a plus.
+///
+/// Every changed line is shown. Long stretches of untouched text between them
+/// are folded away with a note saying how many, so nothing disappears quietly.
 class _DiffView extends StatelessWidget {
-  const _DiffView(this.lines, {this.insertLabel, this.deleteLabel});
+  const _DiffView(
+    this.lines, {
+    this.insertLabel,
+    this.deleteLabel,
+    this.oldStart = 1,
+    this.newStart = 1,
+  });
 
   final List<DiffLine> lines;
   final String? insertLabel;
   final String? deleteLabel;
+
+  /// Line number the first line carries on each side. Not always 1: a conflict
+  /// is a fragment of a file, and saying so is the point of numbering it.
+  final int oldStart;
+  final int newStart;
+
+  static const _style = TextStyle(fontFamily: 'monospace', fontSize: 12);
 
   @override
   Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
     final addBg = dark ? const Color(0xFF14351C) : const Color(0xFFE6FFEC);
     final delBg = dark ? const Color(0xFF3A1417) : const Color(0xFFFFEBE9);
+    final gutter = Theme.of(context).textTheme.bodySmall?.color?.withValues(
+          alpha: 0.55,
+        );
+
+    final rows = _rows();
+    // Enough room for the largest number either column will show.
+    final width = _gutterWidth(rows);
 
     return Container(
       width: double.infinity,
@@ -309,43 +356,36 @@ class _DiffView extends StatelessWidget {
         border: Border.all(color: Theme.of(context).dividerColor),
         borderRadius: BorderRadius.circular(6),
       ),
+      clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (insertLabel != null || deleteLabel != null)
             Padding(
-              padding: const EdgeInsets.fromLTRB(8, 6, 8, 0),
+              padding: const EdgeInsets.fromLTRB(8, 6, 8, 2),
               child: Text(
                 '+ ${insertLabel ?? 'added'}    − ${deleteLabel ?? 'removed'}',
                 style: Theme.of(context).textTheme.labelSmall,
               ),
             ),
-          // Long lines scroll rather than forcing the page sideways.
+          // Long lines scroll rather than forcing the page sideways or being
+          // cut off. IntrinsicWidth lets every row stretch to the widest one,
+          // so a line's colour runs the full width instead of stopping at its
+          // own text.
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                for (final line in _visible())
-                  Container(
-                    color: switch (line.op) {
-                      DiffOp.insert => addBg,
-                      DiffOp.delete => delBg,
-                      DiffOp.equal => null,
-                    },
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
-                    child: Text(
-                      '${switch (line.op) {
-                        DiffOp.insert => '+',
-                        DiffOp.delete => '−',
-                        DiffOp.equal => ' ',
-                      }} ${line.text}',
-                      style: const TextStyle(
-                          fontFamily: 'monospace', fontSize: 12),
-                    ),
-                  ),
-              ],
+            child: IntrinsicWidth(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  for (final row in rows)
+                    if (row is _Skipped)
+                      _skipRow(context, row, width)
+                    else
+                      _lineRow(row as _NumberedLine, width, addBg, delBg,
+                          gutter),
+                ],
+              ),
             ),
           ),
         ],
@@ -353,21 +393,116 @@ class _DiffView extends StatelessWidget {
     );
   }
 
-  /// Trims long runs of unchanged lines, the way a diff shows context only
-  /// around what actually changed.
-  List<DiffLine> _visible() {
-    const context = 3;
-    final keep = <int>{};
-    for (var i = 0; i < lines.length; i++) {
-      if (lines[i].op == DiffOp.equal) continue;
-      for (var j = i - context; j <= i + context; j++) {
-        if (j >= 0 && j < lines.length) keep.add(j);
+  Widget _lineRow(_NumberedLine row, double width, Color addBg, Color delBg,
+      Color? gutter) {
+    return Container(
+      color: switch (row.line.op) {
+        DiffOp.insert => addBg,
+        DiffOp.delete => delBg,
+        DiffOp.equal => null,
+      },
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 1),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _number(row.oldNo, width, gutter),
+          _number(row.newNo, width, gutter),
+          const SizedBox(width: 8),
+          Text(
+            '${switch (row.line.op) {
+              DiffOp.insert => '+',
+              DiffOp.delete => '−',
+              DiffOp.equal => ' ',
+            }} ${row.line.text}',
+            style: _style,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _number(int? value, double width, Color? colour) => SizedBox(
+        width: width,
+        child: Text(
+          value?.toString() ?? '',
+          textAlign: TextAlign.right,
+          style: _style.copyWith(color: colour),
+        ),
+      );
+
+  Widget _skipRow(BuildContext context, _Skipped row, double width) {
+    return Container(
+      color: Theme.of(context).dividerColor.withValues(alpha: 0.25),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+      child: Row(
+        children: [
+          SizedBox(width: width * 2 + 8),
+          Text(
+            '⋮ ${row.count} unchanged '
+            '${row.count == 1 ? 'line' : 'lines'}',
+            style: _style.copyWith(
+              fontStyle: FontStyle.italic,
+              color: Theme.of(context).textTheme.bodySmall?.color,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  double _gutterWidth(List<Object> rows) {
+    var digits = 1;
+    for (final row in rows) {
+      if (row is! _NumberedLine) continue;
+      for (final number in [row.oldNo, row.newNo]) {
+        if (number != null) {
+          digits = digits > '$number'.length ? digits : '$number'.length;
+        }
       }
     }
-    return [
-      for (var i = 0; i < lines.length; i++)
-        if (keep.contains(i)) lines[i],
+    return digits * 8.0 + 6;
+  }
+
+  /// Numbers every line, then drops the long untouched stretches, replacing
+  /// each with a note of what was folded away.
+  List<Object> _rows() {
+    var oldNo = oldStart;
+    var newNo = newStart;
+    final numbered = [
+      for (final line in lines)
+        switch (line.op) {
+          DiffOp.equal => _NumberedLine(line, oldNo++, newNo++),
+          DiffOp.delete => _NumberedLine(line, oldNo++, null),
+          DiffOp.insert => _NumberedLine(line, null, newNo++),
+        },
     ];
+
+    const context = 3;
+    final keep = <int>{};
+    for (var i = 0; i < numbered.length; i++) {
+      if (numbered[i].line.op == DiffOp.equal) continue;
+      for (var j = i - context; j <= i + context; j++) {
+        if (j >= 0 && j < numbered.length) keep.add(j);
+      }
+    }
+
+    final rows = <Object>[];
+    var skipped = 0;
+    void flushSkipped() {
+      if (skipped > 0) rows.add(_Skipped(skipped));
+      skipped = 0;
+    }
+
+    for (var i = 0; i < numbered.length; i++) {
+      if (keep.contains(i)) {
+        flushSkipped();
+        rows.add(numbered[i]);
+      } else {
+        skipped++;
+      }
+    }
+    flushSkipped();
+    return rows;
   }
 }
 
