@@ -2,6 +2,8 @@ import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:sync_net/sync_net.dart';
 
+import '../l10n/gen/app_localizations.dart';
+
 import 'app_settings.dart';
 import 'app_shell.dart';
 import 'storage.dart';
@@ -61,10 +63,15 @@ class _SynchronizerAppState extends State<SynchronizerApp> {
     return ListenableBuilder(
       listenable: _settings,
       builder: (context, _) => MaterialApp(
-        title: 'Synchronizer',
+        onGenerateTitle: (context) => AppLocalizations.of(context).appTitle,
         theme: buildTheme(_settings.scheme, Brightness.light),
         darkTheme: buildTheme(_settings.scheme, Brightness.dark),
         themeMode: _settings.themeMode,
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        // Null follows the system, and an unsupported system language falls
+        // back to the template, English.
+        locale: _settings.locale,
         home: _WindowFrameSync(
           apply: widget.applyWindowBrightness,
           child: HomeShell(
@@ -269,13 +276,14 @@ class _DevicesPageState extends State<DevicesPage> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Devices on this network'),
+        title: Text(l10n.devicesTitle),
         actions: [
           IconButton(
             icon: const Icon(Icons.history),
-            tooltip: 'Sync history',
+            tooltip: l10n.syncHistoryTooltip,
             onPressed: _openHistory,
           ),
         ],
@@ -286,7 +294,7 @@ class _DevicesPageState extends State<DevicesPage> {
             child: Align(
               alignment: Alignment.centerLeft,
               child: Text(
-                'This device: ${widget.self.name}',
+                l10n.thisDevice(widget.self.name),
                 style: Theme.of(context).textTheme.bodySmall,
               ),
             ),
@@ -304,7 +312,8 @@ class _DevicesPageState extends State<DevicesPage> {
                 return ListTile(
                   leading: Icon(_iconFor(device.platform)),
                   title: Text(device.name),
-                  subtitle: Text('${device.address ?? 'unknown'}:${device.port}'),
+                  subtitle: Text(
+                      '${device.address ?? l10n.unknownAddress}:${device.port}'),
                   trailing: paired
                       ? Icon(Icons.link,
                           color: Theme.of(context).colorScheme.primary)
@@ -332,13 +341,15 @@ class _Searching extends StatelessWidget {
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
-        children: const [
-          SizedBox(
-              width: 28, height: 28, child: CircularProgressIndicator(strokeWidth: 3)),
-          SizedBox(height: 16),
-          Text('Looking for devices...'),
-          SizedBox(height: 4),
-          Text('Open Synchronizer on your other device, on the same Wi-Fi.'),
+        children: [
+          const SizedBox(
+              width: 28,
+              height: 28,
+              child: CircularProgressIndicator(strokeWidth: 3)),
+          const SizedBox(height: 16),
+          Text(AppLocalizations.of(context).lookingForDevices),
+          const SizedBox(height: 4),
+          Text(AppLocalizations.of(context).openOnOtherDevice),
         ],
       ),
     );
@@ -354,13 +365,14 @@ class _ConfirmPairingDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     return AlertDialog(
-      title: Text('Pair with ${request.peer.name}?'),
+      title: Text(l10n.pairRequest(request.peer.name)),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Text('Check this code matches the one on the other device:'),
+          Text(l10n.checkCodeMatches),
           const SizedBox(height: 16),
           Center(child: _CodeText(request.code)),
         ],
@@ -368,11 +380,11 @@ class _ConfirmPairingDialog extends StatelessWidget {
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context, false),
-          child: const Text('Reject'),
+          child: Text(l10n.reject),
         ),
         FilledButton(
           onPressed: () => Navigator.pop(context, true),
-          child: const Text('Accept'),
+          child: Text(l10n.accept),
         ),
       ],
     );
@@ -394,26 +406,27 @@ class _OutgoingPairingDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     return FutureBuilder<PairingResult>(
       future: result,
       builder: (context, snapshot) {
         if (snapshot.connectionState != ConnectionState.done) {
           return AlertDialog(
-            title: Text('Pairing with ${device.name}'),
+            title: Text(l10n.pairingWith(device.name)),
             content: ValueListenableBuilder<String?>(
               valueListenable: code,
               builder: (context, value, _) {
                 if (value == null) {
-                  return const _Waiting('Contacting device...');
+                  return _Waiting(l10n.contactingDevice);
                 }
                 return Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const Text('Confirm this code on the other device:'),
+                    Text(l10n.confirmCodeOnOther),
                     const SizedBox(height: 16),
                     _CodeText(value),
                     const SizedBox(height: 16),
-                    const _Waiting('Waiting for confirmation...'),
+                    _Waiting(l10n.waitingForConfirmation),
                   ],
                 );
               },
@@ -422,19 +435,19 @@ class _OutgoingPairingDialog extends StatelessWidget {
         }
 
         final outcome = snapshot.data ??
-            const PairingResult(PairingStatus.failed, error: 'no result');
+            PairingResult(PairingStatus.failed, error: l10n.noResult);
         final message = switch (outcome.status) {
-          PairingStatus.paired => 'Paired with ${device.name}.',
-          PairingStatus.rejected => '${device.name} declined the request.',
-          PairingStatus.failed => 'Could not pair: ${outcome.error}',
+          PairingStatus.paired => l10n.pairedWith(device.name),
+          PairingStatus.rejected => l10n.pairingDeclined(device.name),
+          PairingStatus.failed => l10n.couldNotPair('${outcome.error}'),
         };
         return AlertDialog(
-          title: const Text('Pairing'),
+          title: Text(l10n.pairingTitle),
           content: Text(message),
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: const Text('OK'),
+              child: Text(l10n.ok),
             ),
           ],
         );

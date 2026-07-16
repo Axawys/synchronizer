@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:sync_net/sync_net.dart';
 
+import '../l10n/gen/app_localizations.dart';
+
 import 'app_settings.dart';
 import 'home.dart';
 import 'prefs_trust_store.dart';
@@ -12,13 +14,20 @@ import 'storage.dart';
 
 /// The three places in the app.
 enum _Destination {
-  sync(Icons.sync, 'Sync'),
-  folders(Icons.folder, 'Folders'),
-  settings(Icons.settings, 'Settings');
+  sync(Icons.sync),
+  folders(Icons.folder),
+  settings(Icons.settings);
 
-  const _Destination(this.icon, this.label);
+  const _Destination(this.icon);
   final IconData icon;
-  final String label;
+
+  /// Resolved against the current language rather than stored, since an enum
+  /// constant is fixed at compile time and the language is not.
+  String label(AppLocalizations l10n) => switch (this) {
+        _Destination.sync => l10n.navSync,
+        _Destination.folders => l10n.navFolders,
+        _Destination.settings => l10n.navSettings,
+      };
 }
 
 /// Holds the navigation and the state the destinations share: the trust store
@@ -92,7 +101,9 @@ class _HomeShellState extends State<HomeShell> {
           onDestinationSelected: _select,
           destinations: [
             for (final d in _Destination.values)
-              NavigationDestination(icon: Icon(d.icon), label: d.label),
+              NavigationDestination(
+                  icon: Icon(d.icon),
+                  label: d.label(AppLocalizations.of(context))),
           ],
         ),
       );
@@ -111,7 +122,7 @@ class _HomeShellState extends State<HomeShell> {
               for (final d in _Destination.values)
                 NavigationRailDestination(
                   icon: Icon(d.icon),
-                  label: Text(d.label),
+                  label: Text(d.label(AppLocalizations.of(context))),
                 ),
             ],
           ),
@@ -134,7 +145,7 @@ class _RailHeader extends StatelessWidget {
       child: Align(
         alignment: Alignment.centerLeft,
         child: Text(
-          'Synchronizer',
+          AppLocalizations.of(context).appTitle,
           style: Theme.of(context).textTheme.titleMedium?.copyWith(
                 fontWeight: FontWeight.bold,
               ),

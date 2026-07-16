@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:sync_net/sync_net.dart';
 
+import '../l10n/gen/app_localizations.dart';
 import 'folder_picker_page.dart';
 import 'merge_preview_page.dart';
 import 'storage.dart';
@@ -77,13 +78,16 @@ class _SyncPageState extends State<SyncPage> {
   /// Resolves where [name] lives locally, asking the user to pick the folder
   /// the first time. The chosen folder is the sync target itself.
   Future<String?> _resolveTarget(String name) async {
+    // Read before the first await: after one, this State may be gone and the
+    // context with it.
+    final l10n = AppLocalizations.of(context);
     final existing = await SyncTargets.localPath(widget.device.id, name);
     if (existing != null) return existing;
 
     String? picked;
     if (Platform.isAndroid) {
       if (!await _ensureStoragePermission()) {
-        _toast('All-files access is needed to choose a destination folder.');
+        _toast(l10n.storageAccessNeeded);
         return null;
       }
       if (!mounted) return null;
@@ -94,7 +98,7 @@ class _SyncPageState extends State<SyncPage> {
       );
     } else {
       picked = await getDirectoryPath(
-        confirmButtonText: 'Sync "$name" into this folder',
+        confirmButtonText: l10n.syncIntoThisFolder(name),
       );
     }
     if (picked == null) return null;
@@ -114,6 +118,7 @@ class _SyncPageState extends State<SyncPage> {
   Future<void> _sync(String name) async {
     final client = _client;
     if (client == null) return;
+    final l10n = AppLocalizations.of(context);
 
     final localPath = await _resolveTarget(name);
     if (localPath == null || !mounted) return;
@@ -124,12 +129,12 @@ class _SyncPageState extends State<SyncPage> {
     try {
       merge = await computeMerge(client, name, root, base);
     } catch (e) {
-      _toast('Could not read changes: $e');
+      _toast(l10n.couldNotReadChanges('$e'));
       return;
     }
 
     if (merge.isEmpty) {
-      _toast('"$name" is already in sync.');
+      _toast(l10n.alreadyInSync(name));
       return;
     }
 
@@ -141,7 +146,7 @@ class _SyncPageState extends State<SyncPage> {
       try {
         preview = await buildPreview(client, name, root, merge);
       } catch (e) {
-        _toast('Could not prepare the preview: $e');
+        _toast(l10n.couldNotPreparePreview('$e'));
         return;
       }
       if (!mounted) return;
@@ -185,6 +190,7 @@ class _SyncPageState extends State<SyncPage> {
 
   Future<void> _apply(SyncClient client, String name, Directory root,
       List<ResolvedMerge> resolved, Manifest base) async {
+    final l10n = AppLocalizations.of(context);
     final progress = ValueNotifier<int>(0);
     if (mounted) {
       showDialog<void>(
@@ -208,12 +214,11 @@ class _SyncPageState extends State<SyncPage> {
 
       if (mounted) Navigator.of(context).pop(); // close applying dialog
       _toast(report.ok
-          ? 'Synced ${report.applied} change(s) for "$name".'
-          : 'Synced ${report.applied}, ${report.failures.length} failed. '
-              'Try again to finish.');
+          ? l10n.syncedChanges(report.applied, name)
+          : l10n.syncedPartly(report.applied, report.failures.length));
     } catch (e) {
       if (mounted) Navigator.of(context).pop();
-      _toast('Sync failed: $e');
+      _toast(l10n.syncFailed('$e'));
     } finally {
       progress.dispose();
     }
@@ -249,11 +254,11 @@ class _SyncPageState extends State<SyncPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: Text(widget.device.name)),
-      body: _buildBody(),
+      body: _buildBody(AppLocalizations.of(context)),
     );
   }
 
-  Widget _buildBody() {
+  Widget _buildBody(AppLocalizations l10n) {
     if (_connecting) {
       return const Center(child: CircularProgressIndicator());
     }
@@ -261,16 +266,17 @@ class _SyncPageState extends State<SyncPage> {
       return Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
-          child: Text('Could not connect:\n$_error', textAlign: TextAlign.center),
+          child: Text(l10n.couldNotConnect('$_error'),
+              textAlign: TextAlign.center),
         ),
       );
     }
     if (_dirs.isEmpty) {
-      return const Center(
+      return Center(
         child: Padding(
-          padding: EdgeInsets.all(24),
-          child: Text('This device is not sharing any folders yet.',
-              textAlign: TextAlign.center),
+          padding: const EdgeInsets.all(24),
+          child:
+              Text(l10n.notSharingFolders, textAlign: TextAlign.center),
         ),
       );
     }
@@ -298,8 +304,9 @@ class _ApplyingDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     return AlertDialog(
-      title: const Text('Syncing'),
+      title: Text(l10n.syncingTitle),
       content: ValueListenableBuilder<int>(
         valueListenable: applied,
         builder: (context, value, _) {
@@ -309,7 +316,7 @@ class _ApplyingDialog extends StatelessWidget {
               LinearProgressIndicator(
                   value: total == 0 ? null : value / total),
               const SizedBox(height: 12),
-              Text('$value of $total'),
+              Text(l10n.progressOf(value, total)),
             ],
           );
         },

@@ -14,6 +14,8 @@ Future<List<ResolvedMerge>> _openAndApply(
 }) async {
   List<ResolvedMerge>? result;
   await tester.pumpWidget(MaterialApp(
+    localizationsDelegates: AppLocalizations.localizationsDelegates,
+    supportedLocales: AppLocalizations.supportedLocales,
     home: Builder(
       builder: (context) => ElevatedButton(
         onPressed: () async =>
@@ -54,6 +56,8 @@ void main() {
   Future<List<ResolvedMerge>?> show(WidgetTester tester, SyncPreview preview) async {
     List<ResolvedMerge>? result;
     await tester.pumpWidget(MaterialApp(
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
       home: Builder(
         builder: (context) => ElevatedButton(
           onPressed: () async {

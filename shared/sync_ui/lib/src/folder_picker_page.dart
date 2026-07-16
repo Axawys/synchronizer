@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 
+import '../l10n/gen/app_localizations.dart';
+
 /// A minimal folder browser for Android, where there is no built-in directory
 /// picker we can rely on. It walks real storage with `dart:io` (which needs
 /// all-files access, requested before this opens), lets the user step into
@@ -65,24 +67,27 @@ class _FolderPickerPageState extends State<FolderPickerPage> {
     } on FileSystemException catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Could not create folder: ${e.message}')));
+            .showSnackBar(SnackBar(
+            content: Text(AppLocalizations.of(context)
+                .couldNotCreateFolder(e.message))));
       }
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final subdirs = _subdirs();
     return Scaffold(
       appBar: AppBar(
         leading: _atRoot
             ? null
             : IconButton(icon: const Icon(Icons.arrow_upward), onPressed: _up),
-        title: const Text('Choose folder'),
+        title: Text(l10n.chooseFolder),
         actions: [
           IconButton(
             icon: const Icon(Icons.create_new_folder),
-            tooltip: 'New folder',
+            tooltip: l10n.newFolder,
             onPressed: _newFolder,
           ),
         ],
@@ -92,7 +97,7 @@ class _FolderPickerPageState extends State<FolderPickerPage> {
           padding: const EdgeInsets.symmetric(horizontal: 8),
           child: FilledButton.icon(
             icon: const Icon(Icons.check),
-            label: const Text('Use this folder'),
+            label: Text(l10n.useThisFolder),
             onPressed: () => Navigator.pop(context, _current.path),
           ),
         ),
@@ -108,7 +113,7 @@ class _FolderPickerPageState extends State<FolderPickerPage> {
           ),
           Expanded(
             child: subdirs.isEmpty
-                ? const Center(child: Text('No sub-folders here.'))
+                ? Center(child: Text(l10n.noSubFolders))
                 : ListView.separated(
                     itemCount: subdirs.length,
                     separatorBuilder: (_, _) => const Divider(height: 1),
@@ -147,22 +152,23 @@ class _NewFolderDialogState extends State<_NewFolderDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     return AlertDialog(
-      title: const Text('New folder'),
+      title: Text(l10n.newFolder),
       content: TextField(
         controller: _controller,
         autofocus: true,
-        decoration: const InputDecoration(hintText: 'Folder name'),
+        decoration: InputDecoration(hintText: l10n.folderName),
         onSubmitted: (value) => Navigator.pop(context, value.trim()),
       ),
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
-          child: const Text('Cancel'),
+          child: Text(l10n.cancel),
         ),
         FilledButton(
           onPressed: () => Navigator.pop(context, _controller.text.trim()),
-          child: const Text('Create'),
+          child: Text(l10n.create),
         ),
       ],
     );

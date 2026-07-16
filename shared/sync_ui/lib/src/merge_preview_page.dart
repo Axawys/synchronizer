@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:sync_net/sync_net.dart';
 
+import '../l10n/gen/app_localizations.dart';
+
 /// Shows exactly what a sync will do before a byte is written: which files and
 /// folders appear or go, which lines come and go inside each file, and which
 /// conflicts still need a decision.
@@ -72,6 +74,7 @@ class _MergePreviewPageState extends State<MergePreviewPage> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     final preview = widget.preview;
     final incoming =
         preview.files.where((f) => f.side == PreviewSide.here).toList();
@@ -83,7 +86,7 @@ class _MergePreviewPageState extends State<MergePreviewPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('Review "${widget.folderName}"'),
+        title: Text(l10n.reviewFolder(widget.folderName)),
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(24),
           child: Padding(
@@ -91,7 +94,7 @@ class _MergePreviewPageState extends State<MergePreviewPage> {
             child: Align(
               alignment: Alignment.centerLeft,
               child: Text(
-                'Nothing is written until you apply.',
+                l10n.nothingWrittenYet,
                 style: Theme.of(context).textTheme.bodySmall,
               ),
             ),
@@ -103,31 +106,31 @@ class _MergePreviewPageState extends State<MergePreviewPage> {
           if (preview.folders.isNotEmpty) _FolderSection(preview.folders),
           if (conflicts.isNotEmpty)
             _Section(
-              title: 'Conflicts (${conflicts.length})',
-              subtitle: 'Changed on both devices. Choose what to keep.',
+              title: l10n.conflictsSection(conflicts.length),
+              subtitle: l10n.conflictsSubtitle,
               icon: Icons.warning,
               colour: Theme.of(context).colorScheme.error,
               children: [for (final file in conflicts) _conflictTile(file)],
             ),
           if (merged.isNotEmpty)
             _Section(
-              title: 'Merged automatically (${merged.length})',
-              subtitle: 'Edited in different places, so both sets of edits '
-                  'survive on both devices.',
+              title: l10n.mergedSection(merged.length),
+              subtitle: l10n.mergedSubtitle,
               icon: Icons.merge,
               colour: Colors.purple,
               children: [for (final file in merged) _fileTile(file)],
             ),
           if (incoming.isNotEmpty)
             _Section(
-              title: 'Coming to this device (${incoming.length})',
+              title: l10n.comingHereSection(incoming.length),
               icon: Icons.download,
               colour: Colors.blue,
               children: [for (final file in incoming) _fileTile(file)],
             ),
           if (outgoing.isNotEmpty)
             _Section(
-              title: 'Going to ${widget.deviceName} (${outgoing.length})',
+              title:
+                  l10n.goingThereSection(widget.deviceName, outgoing.length),
               icon: Icons.upload,
               colour: Theme.of(context).colorScheme.primary,
               children: [for (final file in outgoing) _fileTile(file)],
@@ -138,25 +141,26 @@ class _MergePreviewPageState extends State<MergePreviewPage> {
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () => Navigator.pop(context, _resolve()),
         icon: const Icon(Icons.check),
-        label: Text('Apply ${preview.files.length}'),
+        label: Text(l10n.applyCount(preview.files.length)),
       ),
     );
   }
 
   Widget _fileTile(FilePreview file) {
+    final l10n = AppLocalizations.of(context);
     final counts = file.lines.isEmpty
         ? null
         : '+${file.added}  -${file.removed}';
     return ExpansionTile(
       leading: Icon(_iconFor(file.kind), size: 20),
       title: Text(file.path, style: const TextStyle(fontSize: 14)),
-      subtitle: Text([_labelFor(file.kind), ?counts].join('  ')),
+      subtitle: Text([_labelFor(file.kind, l10n), ?counts].join('  ')),
       children: [
         if (file.conflict?.ancestorKnown == false) const _GuessedBaseNote(),
         if (file.lines.isEmpty)
-          const ListTile(
+          ListTile(
             dense: true,
-            title: Text('No line preview (binary file or a deletion).'),
+            title: Text(l10n.noLinePreview),
           )
         else
           _DiffView(file.lines),
@@ -165,6 +169,7 @@ class _MergePreviewPageState extends State<MergePreviewPage> {
   }
 
   Widget _conflictTile(FilePreview file) {
+    final l10n = AppLocalizations.of(context);
     final merge = file.conflict!.merge;
 
     if (merge == null) {
@@ -176,20 +181,21 @@ class _MergePreviewPageState extends State<MergePreviewPage> {
             size: 20, color: Theme.of(context).colorScheme.error),
         title: Text(file.path, style: const TextStyle(fontSize: 14)),
         subtitle: Text(file.lines.isEmpty
-            ? 'Cannot be compared; keep one version'
-            : 'Cannot be merged; keep one version'),
+            ? l10n.cannotBeCompared
+            : l10n.cannotBeMerged),
         initiallyExpanded: true,
         children: [
           if (file.lines.isNotEmpty) ...[
-            _DiffView(file.lines, insertLabel: 'mine', deleteLabel: 'theirs'),
+            _DiffView(file.lines,
+                insertLabel: l10n.labelMine, deleteLabel: l10n.labelTheirs),
             const SizedBox(height: 8),
           ],
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
             child: SegmentedButton<bool>(
-              segments: const [
-                ButtonSegment(value: true, label: Text('Keep mine')),
-                ButtonSegment(value: false, label: Text('Take theirs')),
+              segments: [
+                ButtonSegment(value: true, label: Text(l10n.keepMine)),
+                ButtonSegment(value: false, label: Text(l10n.takeTheirs)),
               ],
               selected: {_keepLocal[file.path]!},
               onSelectionChanged: (s) =>
@@ -205,8 +211,7 @@ class _MergePreviewPageState extends State<MergePreviewPage> {
       leading: Icon(Icons.warning,
           size: 20, color: Theme.of(context).colorScheme.error),
       title: Text(file.path, style: const TextStyle(fontSize: 14)),
-      subtitle: Text('${hunks.length} conflicting '
-          '${hunks.length == 1 ? 'spot' : 'spots'}; the rest merges cleanly'),
+      subtitle: Text(l10n.conflictingSpots(hunks.length)),
       initiallyExpanded: true,
       children: [
         if (!file.conflict!.ancestorKnown) const _GuessedBaseNote(),
@@ -216,6 +221,7 @@ class _MergePreviewPageState extends State<MergePreviewPage> {
   }
 
   Widget _hunkView(String path, int index, ConflictChunk hunk) {
+    final l10n = AppLocalizations.of(context);
     final keepMine = _hunkChoices[path]![index];
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 4, 16, 16),
@@ -229,17 +235,17 @@ class _MergePreviewPageState extends State<MergePreviewPage> {
               for (final line in hunk.theirs) DiffLine(DiffOp.delete, line),
               for (final line in hunk.ours) DiffLine(DiffOp.insert, line),
             ],
-            insertLabel: 'mine',
-            deleteLabel: 'theirs',
+            insertLabel: l10n.labelMine,
+            deleteLabel: l10n.labelTheirs,
             oldStart: hunk.theirStart,
             newStart: hunk.ourStart,
           ),
           const SizedBox(height: 8),
           SegmentedButton<bool>(
             style: const ButtonStyle(visualDensity: VisualDensity.compact),
-            segments: const [
-              ButtonSegment(value: true, label: Text('Keep mine')),
-              ButtonSegment(value: false, label: Text('Take theirs')),
+            segments: [
+              ButtonSegment(value: true, label: Text(l10n.keepMine)),
+              ButtonSegment(value: false, label: Text(l10n.takeTheirs)),
             ],
             selected: {keepMine},
             onSelectionChanged: (s) =>
@@ -258,12 +264,12 @@ class _MergePreviewPageState extends State<MergePreviewPage> {
         PreviewKind.conflict => Icons.warning,
       };
 
-  String _labelFor(PreviewKind kind) => switch (kind) {
-        PreviewKind.create => 'New file',
-        PreviewKind.update => 'Updated',
-        PreviewKind.delete => 'Deleted',
-        PreviewKind.merged => 'Merged',
-        PreviewKind.conflict => 'Conflict',
+  String _labelFor(PreviewKind kind, AppLocalizations l10n) => switch (kind) {
+        PreviewKind.create => l10n.kindNewFile,
+        PreviewKind.update => l10n.kindUpdated,
+        PreviewKind.delete => l10n.kindDeleted,
+        PreviewKind.merged => l10n.kindMerged,
+        PreviewKind.conflict => l10n.kindConflict,
       };
 }
 
@@ -283,10 +289,7 @@ class _GuessedBaseNote extends StatelessWidget {
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              'First sync of this file: there is no copy from a previous sync '
-              'to compare against, so the two versions were merged against '
-              'what they have in common. A line deleted on one device can come '
-              'back. Later syncs merge exactly.',
+              AppLocalizations.of(context).guessedBaseNote,
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ),
@@ -364,7 +367,8 @@ class _DiffView extends StatelessWidget {
             Padding(
               padding: const EdgeInsets.fromLTRB(8, 6, 8, 2),
               child: Text(
-                '+ ${insertLabel ?? 'added'}    − ${deleteLabel ?? 'removed'}',
+                '+ ${insertLabel ?? AppLocalizations.of(context).labelAdded}'
+                '    − ${deleteLabel ?? AppLocalizations.of(context).labelRemoved}',
                 style: Theme.of(context).textTheme.labelSmall,
               ),
             ),
@@ -438,8 +442,7 @@ class _DiffView extends StatelessWidget {
         children: [
           SizedBox(width: width * 2 + 8),
           Text(
-            '⋮ ${row.count} unchanged '
-            '${row.count == 1 ? 'line' : 'lines'}',
+            '⋮ ${AppLocalizations.of(context).unchangedLines(row.count)}',
             style: _style.copyWith(
               fontStyle: FontStyle.italic,
               color: Theme.of(context).textTheme.bodySmall?.color,
@@ -555,8 +558,9 @@ class _FolderSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     return _Section(
-      title: 'Folders (${folders.length})',
+      title: l10n.foldersSection(folders.length),
       icon: Icons.folder,
       colour: Theme.of(context).colorScheme.secondary,
       children: [
@@ -568,10 +572,12 @@ class _FolderSection extends StatelessWidget {
               size: 20,
             ),
             title: Text(folder.path, style: const TextStyle(fontSize: 14)),
-            subtitle: Text(
-              '${folder.created ? 'Created' : 'Removed'} '
-              '${folder.side == PreviewSide.here ? 'here' : 'on the other device'}',
-            ),
+            subtitle: Text(switch ((folder.created, folder.side)) {
+              (true, PreviewSide.here) => l10n.folderCreatedHere,
+              (true, _) => l10n.folderCreatedThere,
+              (false, PreviewSide.here) => l10n.folderRemovedHere,
+              (false, _) => l10n.folderRemovedThere,
+            }),
           ),
       ],
     );

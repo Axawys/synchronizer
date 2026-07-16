@@ -17,6 +17,10 @@ build/
 # noise across machines, so they are ignored here.
 **/pubspec.lock
 
+# Generated localisation code: `flutter pub get` rebuilds it from the .arb
+# files, so the source of truth is lib/l10n/*.arb and the output is noise.
+shared/sync_ui/lib/l10n/gen/
+
 # IDE and editor
 .idea/
 .vscode/

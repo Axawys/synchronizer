@@ -27,7 +27,7 @@ void main() {
     await tester.pump();
 
     expect(find.text('This device: test-desktop'), findsOneWidget);
-    expect(find.text('Looking for devices...'), findsOneWidget);
+    expect(find.text('Looking for devices…'), findsOneWidget);
   });
 
   testWidgets('reports the painted brightness, so the window frame can match it',

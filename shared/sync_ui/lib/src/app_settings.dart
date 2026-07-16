@@ -16,6 +16,23 @@ enum AppColorScheme {
   final String label;
 }
 
+/// The languages the user can pick between, plus following the system.
+///
+/// Named in their own language, the way every other app lists them: someone who
+/// switched to the wrong one has to find their way back, and "Russian" is no
+/// help if you cannot read it.
+enum AppLanguage {
+  system(null, 'System'),
+  english(Locale('en'), 'English'),
+  russian(Locale('ru'), 'Русский');
+
+  const AppLanguage(this.locale, this.label);
+
+  /// The locale to force, or null to follow the system.
+  final Locale? locale;
+  final String label;
+}
+
 /// Appearance and startup preferences. A [ChangeNotifier] because changing any
 /// of these has to rebuild the app above [MaterialApp], not just one screen.
 ///
@@ -24,12 +41,19 @@ enum AppColorScheme {
 class AppSettings extends ChangeNotifier {
   static const _schemeKey = 'color_scheme';
   static const _themeModeKey = 'theme_mode';
+  static const _languageKey = 'language';
 
   AppColorScheme _scheme = AppColorScheme.synchronizer;
   ThemeMode _themeMode = ThemeMode.system;
+  AppLanguage _language = AppLanguage.system;
 
   AppColorScheme get scheme => _scheme;
   ThemeMode get themeMode => _themeMode;
+  AppLanguage get language => _language;
+
+  /// The locale to force, or null to follow the system - which is what
+  /// [MaterialApp.locale] wants: null there means "decide from the platform".
+  Locale? get locale => _language.locale;
 
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
@@ -43,7 +67,20 @@ class AppSettings extends ChangeNotifier {
       prefs.getString(_themeModeKey),
       ThemeMode.system,
     );
+    _language = _byName(
+      AppLanguage.values,
+      prefs.getString(_languageKey),
+      AppLanguage.system,
+    );
     notifyListeners();
+  }
+
+  Future<void> setLanguage(AppLanguage value) async {
+    if (value == _language) return;
+    _language = value;
+    notifyListeners();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_languageKey, value.name);
   }
 
   Future<void> setScheme(AppColorScheme value) async {

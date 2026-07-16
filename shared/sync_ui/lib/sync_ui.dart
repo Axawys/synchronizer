@@ -6,6 +6,7 @@
 /// rather than duplicated.
 library;
 
+export 'l10n/gen/app_localizations.dart';
 export 'src/app_settings.dart';
 export 'src/app_shell.dart';
 export 'src/autostart.dart';

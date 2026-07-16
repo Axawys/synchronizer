@@ -21,6 +21,6 @@ void main() {
     await tester.pump();
 
     expect(find.text('This device: test-phone'), findsOneWidget);
-    expect(find.text('Looking for devices...'), findsOneWidget);
+    expect(find.text('Looking for devices…'), findsOneWidget);
   });
 }

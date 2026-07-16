@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
+import '../l10n/gen/app_localizations.dart';
 import 'app_settings.dart';
 import 'autostart.dart';
 import 'storage.dart';
@@ -58,14 +59,15 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   Widget build(BuildContext context) {
     final plainSync = _plainSync;
+    final l10n = AppLocalizations.of(context);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
+      appBar: AppBar(title: Text(l10n.settingsTitle)),
       body: ListView(
         children: [
-          _Heading('Appearance'),
+          _Heading(l10n.sectionAppearance),
           ListTile(
-            title: const Text('Colour scheme'),
+            title: Text(l10n.colourScheme),
             trailing: DropdownButton<AppColorScheme>(
               value: widget.settings.scheme,
               onChanged: (value) {
@@ -78,27 +80,48 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ),
           ListTile(
-            title: const Text('Theme'),
+            title: Text(l10n.theme),
             trailing: DropdownButton<ThemeMode>(
               value: widget.settings.themeMode,
               onChanged: (value) {
                 if (value != null) widget.settings.setThemeMode(value);
               },
-              items: const [
-                DropdownMenuItem(value: ThemeMode.system, child: Text('System')),
-                DropdownMenuItem(value: ThemeMode.light, child: Text('Light')),
-                DropdownMenuItem(value: ThemeMode.dark, child: Text('Dark')),
+              items: [
+                DropdownMenuItem(
+                    value: ThemeMode.system, child: Text(l10n.themeSystem)),
+                DropdownMenuItem(
+                    value: ThemeMode.light, child: Text(l10n.themeLight)),
+                DropdownMenuItem(
+                    value: ThemeMode.dark, child: Text(l10n.themeDark)),
+              ],
+            ),
+          ),
+          ListTile(
+            title: Text(l10n.language),
+            trailing: DropdownButton<AppLanguage>(
+              value: widget.settings.language,
+              onChanged: (value) {
+                if (value != null) widget.settings.setLanguage(value);
+              },
+              items: [
+                for (final language in AppLanguage.values)
+                  DropdownMenuItem(
+                    value: language,
+                    // Every language names itself, except "follow the system",
+                    // which has no language of its own to be named in.
+                    child: Text(language == AppLanguage.system
+                        ? l10n.languageSystem
+                        : language.label),
+                  ),
               ],
             ),
           ),
           const Divider(),
 
-          _Heading('Syncing'),
+          _Heading(l10n.sectionSyncing),
           SwitchListTile(
-            title: const Text('Plain sync'),
-            subtitle: const Text(
-                'Apply changes without showing the diff for confirmation. '
-                'Conflicts are resolved by taking the more recently edited side.'),
+            title: Text(l10n.plainSync),
+            subtitle: Text(l10n.plainSyncSubtitle),
             value: plainSync ?? false,
             onChanged: plainSync == null
                 ? null
@@ -110,11 +133,10 @@ class _SettingsPageState extends State<SettingsPage> {
 
           if (Autostart.supported) ...[
             const Divider(),
-            _Heading('Startup'),
+            _Heading(l10n.sectionStartup),
             SwitchListTile(
-              title: const Text('Start when I log in'),
-              subtitle: const Text(
-                  'Launch Synchronizer automatically with the desktop session.'),
+              title: Text(l10n.startAtLogin),
+              subtitle: Text(l10n.startAtLoginSubtitle),
               value: _autostart,
               onChanged: (value) async {
                 setState(() => _autostart = value);
@@ -124,12 +146,12 @@ class _SettingsPageState extends State<SettingsPage> {
           ],
 
           const Divider(),
-          _Heading('About'),
+          _Heading(l10n.sectionAbout),
           ListTile(
-            title: const Text('Synchronizer'),
+            title: Text(l10n.appTitle),
             subtitle: Text(
               [
-                if (_version.isNotEmpty) 'Version $_version',
+                if (_version.isNotEmpty) l10n.versionLabel(_version),
                 '© $kCopyrightYear $kDeveloper',
               ].join('\n'),
             ),

@@ -1,6 +1,8 @@
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 
+import '../l10n/gen/app_localizations.dart';
+
 import 'storage.dart';
 
 /// Lets the user choose which local folders this device offers to paired peers.
@@ -23,7 +25,9 @@ class _SharedFoldersPageState extends State<SharedFoldersPage> {
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Folder picking is not available here.')),
+          SnackBar(
+              content:
+                  Text(AppLocalizations.of(context).folderPickingUnavailable)),
         );
       }
       return;
@@ -33,23 +37,24 @@ class _SharedFoldersPageState extends State<SharedFoldersPage> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     return Scaffold(
-      appBar: AppBar(title: const Text('Shared folders')),
+      appBar: AppBar(title: Text(l10n.sharedFoldersTitle)),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _add,
         icon: const Icon(Icons.create_new_folder),
-        label: const Text('Share a folder'),
+        label: Text(l10n.shareAFolder),
       ),
       body: ListenableBuilder(
         listenable: widget.folders,
         builder: (context, _) {
           final folders = widget.folders.folders;
           if (folders.isEmpty) {
-            return const Center(
+            return Center(
               child: Padding(
-                padding: EdgeInsets.all(32),
+                padding: const EdgeInsets.all(32),
                 child: Text(
-                  'No folders shared yet.\nShare a folder to let paired devices sync it.',
+                  l10n.noFoldersShared,
                   textAlign: TextAlign.center,
                 ),
               ),

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../l10n/gen/app_localizations.dart';
+
 import 'storage.dart';
 
 /// The sync history: what was reconciled, with which device, and when.
@@ -32,14 +34,15 @@ class _SyncLogPageState extends State<SyncLogPage> {
   @override
   Widget build(BuildContext context) {
     final entries = _entries;
+    final l10n = AppLocalizations.of(context);
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Sync history'),
+        title: Text(l10n.historyTitle),
         actions: [
           if (entries != null && entries.isNotEmpty)
             IconButton(
               icon: const Icon(Icons.delete_sweep),
-              tooltip: 'Clear history',
+              tooltip: l10n.clearHistory,
               onPressed: _clear,
             ),
         ],
@@ -47,10 +50,10 @@ class _SyncLogPageState extends State<SyncLogPage> {
       body: entries == null
           ? const Center(child: CircularProgressIndicator())
           : entries.isEmpty
-              ? const Center(
+              ? Center(
                   child: Padding(
-                    padding: EdgeInsets.all(24),
-                    child: Text('Nothing synced yet.'),
+                    padding: const EdgeInsets.all(24),
+                    child: Text(l10n.nothingSyncedYet),
                   ),
                 )
               : ListView.separated(
@@ -70,6 +73,7 @@ class _EntryTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final failed = entry.failed > 0;
+    final l10n = AppLocalizations.of(context);
     return ListTile(
       leading: Icon(
         failed ? Icons.error_outline : Icons.check_circle_outline,
@@ -78,7 +82,7 @@ class _EntryTile extends StatelessWidget {
             : Theme.of(context).colorScheme.primary,
       ),
       title: Text('${entry.folder} — ${entry.peerName}'),
-      subtitle: Text(_summary()),
+      subtitle: Text(_summary(l10n)),
       trailing: Text(
         _when(entry.at),
         style: Theme.of(context).textTheme.bodySmall,
@@ -86,13 +90,13 @@ class _EntryTile extends StatelessWidget {
     );
   }
 
-  String _summary() {
+  String _summary(AppLocalizations l10n) {
     final parts = <String>[];
-    if (entry.downloaded > 0) parts.add('${entry.downloaded} in');
-    if (entry.uploaded > 0) parts.add('${entry.uploaded} out');
-    if (entry.conflicts > 0) parts.add('${entry.conflicts} conflicts');
-    if (entry.failed > 0) parts.add('${entry.failed} failed');
-    return parts.isEmpty ? 'no changes' : parts.join(', ');
+    if (entry.downloaded > 0) parts.add(l10n.logIn(entry.downloaded));
+    if (entry.uploaded > 0) parts.add(l10n.logOut(entry.uploaded));
+    if (entry.conflicts > 0) parts.add(l10n.logConflicts(entry.conflicts));
+    if (entry.failed > 0) parts.add(l10n.logFailed(entry.failed));
+    return parts.isEmpty ? l10n.logNoChanges : parts.join(', ');
   }
 
   String _when(DateTime at) {

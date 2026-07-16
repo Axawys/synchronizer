@@ -51,6 +51,7 @@ void main() {
       SharedPreferences.setMockInitialValues({
         'color_scheme': 'no-such-scheme',
         'theme_mode': 'sideways',
+        'language': 'klingon',
       });
 
       final settings = AppSettings();
@@ -58,6 +59,39 @@ void main() {
 
       expect(settings.scheme, AppColorScheme.synchronizer);
       expect(settings.themeMode, ThemeMode.system);
+      expect(settings.language, AppLanguage.system);
+    });
+
+    test('follows the system language until told otherwise', () async {
+      final settings = AppSettings();
+      await settings.load();
+
+      expect(settings.language, AppLanguage.system);
+      // Null is how MaterialApp is told to decide from the platform; anything
+      // else would pin the app to one language behind the user's back.
+      expect(settings.locale, isNull);
+    });
+
+    test('remembers the chosen language', () async {
+      await AppSettings().setLanguage(AppLanguage.russian);
+
+      final reloaded = AppSettings();
+      await reloaded.load();
+
+      expect(reloaded.language, AppLanguage.russian);
+      expect(reloaded.locale, const Locale('ru'));
+    });
+
+    test('every language the app offers is one it can actually show', () {
+      // A picker offering a language with no translations would just show
+      // English and look broken.
+      final offered = AppLanguage.values
+          .where((l) => l.locale != null)
+          .map((l) => l.locale!.languageCode);
+      final supported =
+          AppLocalizations.supportedLocales.map((l) => l.languageCode);
+
+      expect(supported, containsAll(offered));
     });
   });
 
