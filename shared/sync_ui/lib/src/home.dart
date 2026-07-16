@@ -5,6 +5,7 @@ import 'package:sync_net/sync_net.dart';
 import 'prefs_trust_store.dart';
 import 'shared_folders_page.dart';
 import 'storage.dart';
+import 'sync_log_page.dart';
 import 'sync_page.dart';
 
 /// Root widget for both apps. The only per-platform difference is
@@ -162,6 +163,12 @@ class _DevicesPageState extends State<DevicesPage> {
     showDialog<void>(context: context, builder: (_) => const _SettingsDialog());
   }
 
+  void _openHistory() {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => const SyncLogPage(),
+    ));
+  }
+
   // We are asking another device to pair.
   Future<void> _startPairing(DeviceInfo device) async {
     final address = device.address;
@@ -204,6 +211,11 @@ class _DevicesPageState extends State<DevicesPage> {
             icon: const Icon(Icons.folder_shared),
             tooltip: 'Shared folders',
             onPressed: _openSharedFolders,
+          ),
+          IconButton(
+            icon: const Icon(Icons.history),
+            tooltip: 'Sync history',
+            onPressed: _openHistory,
           ),
           IconButton(
             icon: const Icon(Icons.settings),

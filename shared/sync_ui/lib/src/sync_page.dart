@@ -170,19 +170,48 @@ class _SyncPageState extends State<SyncPage> {
       );
     }
     try {
-      await applyMerge(client, name, root, resolved,
-          onProgress: (applied, _) => progress.value = applied);
-      // Both sides now match; record it as the base for next time.
-      await BaseManifests.save(
-          widget.device.id, name, await Manifest.scan(root));
+      final report = await applyMerge(client, name, root, resolved,
+          onProgress: (done, _) => progress.value = done);
+
+      if (report.ok) {
+        // Both sides now match; record it as the base for next time. If any
+        // file failed we keep the old base, so the next sync still knows what
+        // changed where.
+        await BaseManifests.save(
+            widget.device.id, name, await Manifest.scan(root));
+      }
+      await _log(name, resolved, report);
+
       if (mounted) Navigator.of(context).pop(); // close applying dialog
-      _toast('Synced ${resolved.length} change(s) for "$name".');
+      _toast(report.ok
+          ? 'Synced ${report.applied} change(s) for "$name".'
+          : 'Synced ${report.applied}, ${report.failures.length} failed. '
+              'Try again to finish.');
     } catch (e) {
       if (mounted) Navigator.of(context).pop();
       _toast('Sync failed: $e');
     } finally {
       progress.dispose();
     }
+  }
+
+  /// Records what this sync actually achieved. Files that failed are counted
+  /// only as failures, not as transferred.
+  Future<void> _log(
+      String name, List<ResolvedMerge> resolved, MergeReport report) async {
+    final failed = report.failures.map((f) => f.path).toSet();
+    final done = resolved.where((r) => !failed.contains(r.item.path));
+
+    await SyncLog.add(SyncLogEntry(
+      at: DateTime.now(),
+      peerName: widget.device.name,
+      folder: name,
+      downloaded: done.where((r) => r.toLocal).length,
+      uploaded: done.where((r) => !r.toLocal).length,
+      conflicts:
+          resolved.where((r) => r.item.kind == MergeKind.conflict).length,
+      failed: failed.length,
+    ));
   }
 
   void _toast(String message) {

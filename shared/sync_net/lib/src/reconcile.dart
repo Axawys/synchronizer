@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 import 'package:sync_core/sync_core.dart';
 
@@ -49,40 +50,84 @@ bool conflictResolvesToLocal(MergeItem item) {
   return remoteTime.isAfter(localTime); // newer wins
 }
 
+/// One file that could not be reconciled, and why.
+class MergeFailure {
+  const MergeFailure(this.path, this.reason);
+  final String path;
+  final String reason;
+
+  @override
+  String toString() => '$path: $reason';
+}
+
+/// The outcome of [applyMerge]. [ok] means every file was reconciled, which is
+/// the only case where the caller may record a new agreed base.
+class MergeReport {
+  const MergeReport({required this.applied, required this.failures});
+
+  /// Files reconciled successfully.
+  final int applied;
+  final List<MergeFailure> failures;
+
+  bool get ok => failures.isEmpty;
+}
+
 /// Applies the [resolved] items, streaming files each way over the session.
-/// After it returns, the reconciled files match on both devices, so the caller
-/// can record the new local manifest as the next [base].
-Future<void> applyMerge(
+///
+/// A file that fails (a dropped connection, an unreadable file, a checksum
+/// mismatch) does not abort the rest: it is collected in the report and the
+/// remaining files are still reconciled. Anything transferred is verified
+/// against the hash the sender advertised, so corrupted content never lands.
+///
+/// Only when [MergeReport.ok] may the caller record the local manifest as the
+/// next base: if some files did not make it, the two sides do not agree yet and
+/// keeping the older base is what lets the next sync classify them correctly.
+Future<MergeReport> applyMerge(
   SyncClient client,
   String name,
   Directory localRoot,
   List<ResolvedMerge> resolved, {
-  void Function(int applied, int total)? onProgress,
+  void Function(int done, int total)? onProgress,
 }) async {
   await localRoot.create(recursive: true);
 
   var applied = 0;
+  var done = 0;
+  final failures = <MergeFailure>[];
+
   for (final r in resolved) {
     final item = r.item;
-    if (r.toLocal) {
-      // Bring the remote's version here.
-      if (item.remote == null) {
-        await _deleteLocal(localRoot, item.path);
+    try {
+      if (r.toLocal) {
+        // Bring the remote's version here.
+        if (item.remote == null) {
+          await _deleteLocal(localRoot, item.path);
+        } else {
+          final bytes = await client.fetchFile(name, item.path);
+          final actual = sha256.convert(bytes).toString();
+          if (actual != item.remote!.hash) {
+            throw const SessionException('content did not match its checksum');
+          }
+          await _writeLocal(localRoot, item.path, bytes);
+        }
       } else {
-        final bytes = await client.fetchFile(name, item.path);
-        await _writeLocal(localRoot, item.path, bytes);
+        // Send this device's version to the remote. putFile sends the hash with
+        // it, so the peer rejects a corrupted body.
+        if (item.local == null) {
+          await client.deleteFile(name, item.path);
+        } else {
+          await client.putFile(
+              name, item.path, await _readLocal(localRoot, item.path));
+        }
       }
-    } else {
-      // Send this device's version to the remote.
-      if (item.local == null) {
-        await client.deleteFile(name, item.path);
-      } else {
-        final bytes = await _readLocal(localRoot, item.path);
-        await client.putFile(name, item.path, bytes);
-      }
+      applied++;
+    } catch (e) {
+      failures.add(MergeFailure(item.path, '$e'));
     }
-    onProgress?.call(++applied, resolved.length);
+    onProgress?.call(++done, resolved.length);
   }
+
+  return MergeReport(applied: applied, failures: failures);
 }
 
 File _localFile(Directory root, String path) =>

@@ -1,5 +1,8 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:sync_net/sync_net.dart';
 import 'package:test/test.dart';
 
@@ -113,6 +116,85 @@ void main() {
 
     await expectSidesMatch();
     expect(File('${remote.path}/note.md').readAsStringSync(), 'mine');
+  });
+
+  test('a merge reports success and lets the caller trust the result', () async {
+    File('${local.path}/a.md').writeAsStringSync('a');
+    final client = await connect();
+    addTearDown(client.close);
+
+    final merge = await computeMerge(client, 'notes', local, Manifest({}));
+    final report = await applyMerge(
+        client, 'notes', local, merge.items.map(ResolvedMerge.natural).toList());
+
+    expect(report.ok, isTrue);
+    expect(report.applied, 1);
+    expect(report.failures, isEmpty);
+  });
+
+  test('one unreadable file fails alone; the rest still sync', () async {
+    File('${local.path}/good.md').writeAsStringSync('fine');
+    // A path recorded in the manifest but missing on disk stands in for a file
+    // that cannot be read when the push tries to send it.
+    final ghost = FileEntry(
+        path: 'ghost.md', size: 1, modified: DateTime.utc(2026), hash: 'deadbeef');
+
+    final client = await connect();
+    addTearDown(client.close);
+
+    final merge = await computeMerge(client, 'notes', local, Manifest({}));
+    final resolved = [
+      ...merge.items.map(ResolvedMerge.natural),
+      ResolvedMerge(
+        MergeItem(
+            path: 'ghost.md', kind: MergeKind.pushToRemote, local: ghost),
+        toLocal: false,
+      ),
+    ];
+
+    final report = await applyMerge(client, 'notes', local, resolved);
+
+    expect(report.ok, isFalse);
+    expect(report.applied, 1); // good.md still made it
+    expect(report.failures.single.path, 'ghost.md');
+    expect(File('${remote.path}/good.md').readAsStringSync(), 'fine');
+  });
+
+  test('the peer rejects a put whose body does not match its hash', () async {
+    // putFile always sends the true hash, so speak the protocol directly to
+    // advertise a wrong one and prove the peer refuses to write it.
+    final conn = await PeerConnection.connect('127.0.0.1', server.boundPort);
+    final frames = StreamIterator(conn.frames);
+    addTearDown(() async {
+      await frames.cancel();
+      await conn.close();
+    });
+
+    conn.send({'type': SessionType.hello, 'deviceId': phone.id});
+    await frames.moveNext();
+    final serverNonce = frames.current.header['nonce']! as String;
+
+    conn.send({
+      'type': SessionType.auth,
+      'nonce': 'client-nonce',
+      'mac': Hmac(sha256, utf8.encode(secret))
+          .convert(utf8.encode('client:$serverNonce'))
+          .toString(),
+    });
+    await frames.moveNext();
+    expect(frames.current.type, SessionType.ok);
+
+    conn.send({
+      'type': SessionType.putFile,
+      'name': 'notes',
+      'path': 'bad.md',
+      'hash': 'not-the-real-hash',
+    }, [1, 2, 3]);
+    await frames.moveNext();
+
+    expect(frames.current.type, SessionType.error);
+    expect(frames.current.header['message'], 'hash mismatch');
+    expect(File('${remote.path}/bad.md').existsSync(), isFalse);
   });
 
   test('automatic conflict resolution takes the newer side', () async {

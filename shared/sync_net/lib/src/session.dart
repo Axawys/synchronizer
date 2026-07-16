@@ -175,8 +175,16 @@ class SyncClient {
 
   /// Writes [bytes] to [path] inside the peer's shared directory [name],
   /// creating or overwriting it. Waits for the peer to acknowledge the write.
+  ///
+  /// The content hash travels with the request so the peer can reject a body
+  /// that arrived corrupted instead of writing it into the vault.
   Future<void> putFile(String name, String path, List<int> bytes) async {
-    _conn.send({'type': SessionType.putFile, 'name': name, 'path': path}, bytes);
+    _conn.send({
+      'type': SessionType.putFile,
+      'name': name,
+      'path': path,
+      'hash': sha256.convert(bytes).toString(),
+    }, bytes);
     await _expectAck('file put');
   }
 
@@ -323,6 +331,15 @@ Future<void> _servePut(
   final resolved = _resolveWithin(root, rel);
   if (resolved == null) {
     conn.send({'type': SessionType.error, 'message': 'invalid path'});
+    return;
+  }
+
+  // Reject a body that did not survive the trip intact, rather than writing
+  // corrupted content into the vault.
+  final expected = request.header['hash'];
+  if (expected is String &&
+      sha256.convert(request.body).toString() != expected) {
+    conn.send({'type': SessionType.error, 'message': 'hash mismatch'});
     return;
   }
 
