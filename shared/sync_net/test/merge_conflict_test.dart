@@ -38,8 +38,10 @@ void main() {
 
   tearDown(() async {
     await server.stop();
-    remote.deleteSync(recursive: true);
-    local.deleteSync(recursive: true);
+    // Tolerant: some tests delete a folder on purpose.
+    for (final dir in [remote, local]) {
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+    }
   });
 
   Future<SyncClient> connect() => SyncClient.connect('127.0.0.1', server.boundPort,
@@ -201,6 +203,62 @@ void main() {
       File('${local.path}/note.md').deleteSync();
       await refreshBaseStore(local, second, await Manifest.scan(local));
       expect(await BaseStore(local).read('note.md'), isNull);
+    });
+  });
+
+  group('a folder that is gone', () {
+    test('is not read as the user deleting every file in it', () async {
+      // Synced once, then the folder was deleted, moved, or its drive was
+      // unmounted. An empty scan looks identical to "all deleted", and acting
+      // on that would delete the copy on the other device - which is the only
+      // good copy left.
+      File('${remote.path}/note.md').writeAsStringSync('the only copy\n');
+      final base = Manifest({
+        'note.md': FileEntry(
+            path: 'note.md',
+            size: 5,
+            modified: DateTime.utc(2026),
+            hash: 'whatever'),
+      });
+      local.deleteSync(recursive: true);
+
+      final client = await connect();
+      addTearDown(client.close);
+
+      await expectLater(computeMerge(client, 'notes', local, base),
+          throwsA(isA<MissingRootException>()));
+      expect(File('${remote.path}/note.md').existsSync(), isTrue,
+          reason: 'the peer still has its file');
+    });
+
+    test('is fine when nothing was ever synced into it', () async {
+      // No base means no claim that anything was ever there, so a missing
+      // folder is just a folder about to be created.
+      File('${remote.path}/note.md').writeAsStringSync('hello\n');
+      local.deleteSync(recursive: true);
+
+      final client = await connect();
+      addTearDown(client.close);
+
+      final result = await computeMerge(client, 'notes', local, Manifest({}));
+      expect(result.items.single.kind, MergeKind.pullToLocal);
+    });
+
+    test('an emptied folder that still exists does propagate its deletions',
+        () async {
+      // The other side of the line: the folder is there and the user really did
+      // remove the file, so that deletion is theirs to make.
+      File('${local.path}/note.md').writeAsStringSync('bye\n');
+      File('${remote.path}/note.md').writeAsStringSync('bye\n');
+      final base = await Manifest.scan(local);
+      File('${local.path}/note.md').deleteSync();
+
+      final client = await connect();
+      addTearDown(client.close);
+
+      final result = await computeMerge(client, 'notes', local, base);
+      expect(result.items.single.kind, MergeKind.pushToRemote);
+      expect(result.items.single.local, isNull, reason: 'delete it there too');
     });
   });
 

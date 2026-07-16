@@ -157,5 +157,12 @@
   "spotsToDecide": "{count, plural, one{1 spot to decide; the rest merges cleanly} other{{count} spots to decide; the rest merges cleanly}}",
   "@spotsToDecide": {"placeholders": {"count": {"type": "int"}}},
   "allSpotsDecided": "{count, plural, one{1 spot decided} other{All {count} spots decided}}",
-  "@allSpotsDecided": {"placeholders": {"count": {"type": "int"}}}
+  "@allSpotsDecided": {"placeholders": {"count": {"type": "int"}}},
+  "changeFolder": "Change folder",
+  "folderNotChosenYet": "Folder not chosen yet",
+  "folderNowSyncsTo": "\"{name}\" now syncs into {path}. The next sync compares everything again.",
+  "@folderNowSyncsTo": {"placeholders": {"name": {"type": "String"}, "path": {"type": "String"}}},
+  "folderGoneTitle": "That folder is gone",
+  "folderGoneBody": "\"{name}\" synced into {path}, which is not there any more. Syncing now would look like you deleted every file, and they would be deleted on the other device too. Choose where the folder lives now.",
+  "@folderGoneBody": {"placeholders": {"name": {"type": "String"}, "path": {"type": "String"}}}
 }

@@ -35,10 +35,22 @@ class _SyncPageState extends State<SyncPage> {
   String? _error;
   bool _connecting = true;
 
+  /// Where each folder currently syncs to, so the screen can show it and let
+  /// the user change it. A folder with no entry has never been synced here.
+  final Map<String, String> _targets = {};
+
   @override
   void initState() {
     super.initState();
     _connect();
+  }
+
+  Future<void> _loadTargets() async {
+    for (final dir in _dirs) {
+      final path = await SyncTargets.localPath(widget.device.id, dir.name);
+      if (path != null) _targets[dir.name] = path;
+    }
+    if (mounted) setState(() {});
   }
 
   Future<void> _connect() async {
@@ -59,6 +71,7 @@ class _SyncPageState extends State<SyncPage> {
         _dirs = dirs;
         _connecting = false;
       });
+      await _loadTargets();
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -78,11 +91,21 @@ class _SyncPageState extends State<SyncPage> {
   /// Resolves where [name] lives locally, asking the user to pick the folder
   /// the first time. The chosen folder is the sync target itself.
   Future<String?> _resolveTarget(String name) async {
+    final existing = await SyncTargets.localPath(widget.device.id, name);
+    if (existing != null) return existing;
+    return _pickTarget(name);
+  }
+
+  /// Asks the user for a folder and records it as where [name] syncs to.
+  ///
+  /// Changing the folder drops the recorded ancestor: it describes the old
+  /// place, and against a different folder it would read as a pile of
+  /// deletions. Without it the next sync is simply a first sync, which is the
+  /// truth of the matter.
+  Future<String?> _pickTarget(String name) async {
     // Read before the first await: after one, this State may be gone and the
     // context with it.
     final l10n = AppLocalizations.of(context);
-    final existing = await SyncTargets.localPath(widget.device.id, name);
-    if (existing != null) return existing;
 
     String? picked;
     if (Platform.isAndroid) {
@@ -103,8 +126,20 @@ class _SyncPageState extends State<SyncPage> {
     }
     if (picked == null) return null;
 
+    final previous = _targets[name];
     await SyncTargets.setLocalPath(widget.device.id, name, picked);
+    if (previous != null && previous != picked) {
+      await BaseManifests.clear(widget.device.id, name);
+    }
+    if (mounted) setState(() => _targets[name] = picked!);
     return picked;
+  }
+
+  /// The "change folder" action: pick a new one and say what happened.
+  Future<void> _changeTarget(String name) async {
+    final l10n = AppLocalizations.of(context);
+    final picked = await _pickTarget(name);
+    if (picked != null) _toast(l10n.folderNowSyncsTo(name, picked));
   }
 
   /// Ensures all-files access on Android, sending the user to the system
@@ -128,6 +163,11 @@ class _SyncPageState extends State<SyncPage> {
     final MergeResult merge;
     try {
       merge = await computeMerge(client, name, root, base);
+    } on MissingRootException {
+      // The folder was deleted, moved, or its drive is not mounted. Syncing
+      // would read that as "delete everything", so ask instead of guessing.
+      await _offerNewFolder(name, root.path);
+      return;
     } catch (e) {
       _toast(l10n.couldNotReadChanges('$e'));
       return;
@@ -224,6 +264,31 @@ class _SyncPageState extends State<SyncPage> {
     }
   }
 
+  /// Tells the user their folder is gone and offers to point the sync
+  /// somewhere else. Nothing is synced either way until they decide.
+  Future<void> _offerNewFolder(String name, String path) async {
+    final l10n = AppLocalizations.of(context);
+    final change = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        icon: const Icon(Icons.folder_off),
+        title: Text(l10n.folderGoneTitle),
+        content: Text(l10n.folderGoneBody(name, path)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(l10n.cancel),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(l10n.chooseFolder),
+          ),
+        ],
+      ),
+    );
+    if (change ?? false) await _changeTarget(name);
+  }
+
   /// Records what this sync actually achieved. Files that failed are counted
   /// only as failures, not as transferred.
   Future<void> _log(
@@ -285,10 +350,31 @@ class _SyncPageState extends State<SyncPage> {
       separatorBuilder: (_, _) => const Divider(height: 1),
       itemBuilder: (context, i) {
         final dir = _dirs[i];
+        final target = _targets[dir.name];
         return ListTile(
           leading: const Icon(Icons.folder_shared),
           title: Text(dir.name),
-          trailing: const Icon(Icons.sync),
+          // Where it lands is not something to have to remember, and it is the
+          // first thing worth knowing when a sync goes somewhere unexpected.
+          subtitle: Text(
+            target ?? l10n.folderNotChosenYet,
+            style: TextStyle(
+              fontSize: 12,
+              fontStyle: target == null ? FontStyle.italic : null,
+            ),
+          ),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (target != null)
+                IconButton(
+                  icon: const Icon(Icons.drive_file_move_outline),
+                  tooltip: l10n.changeFolder,
+                  onPressed: () => _changeTarget(dir.name),
+                ),
+              const Icon(Icons.sync),
+            ],
+          ),
           onTap: () => _sync(dir.name),
         );
       },

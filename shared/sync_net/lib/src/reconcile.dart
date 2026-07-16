@@ -142,14 +142,41 @@ Future<void> refreshBaseStore(
   }
 }
 
+/// Raised when the folder a sync points at has gone missing, and the last sync
+/// says it used to hold files.
+///
+/// This is not the same as the user emptying a folder, and the difference
+/// matters more than anything else here: an empty scan of a folder that is no
+/// longer there reads exactly like "every file was deleted", which would push
+/// those deletions to the other device and take the vault with it. A folder
+/// that was moved, renamed, or sat on an unmounted drive would destroy the copy
+/// that was still fine. Nothing but the user can say which happened, so the
+/// sync stops and asks.
+class MissingRootException implements Exception {
+  const MissingRootException(this.path);
+
+  /// Where the folder was expected to be.
+  final String path;
+
+  @override
+  String toString() => 'MissingRootException: $path is gone';
+}
+
 /// Fetches the peer's manifest, scans the local copy, and reconciles both
 /// against [base] (the last agreed manifest, empty on a first sync).
+///
+/// Throws [MissingRootException] if the folder is gone but [base] says it once
+/// had files: see that class for why this cannot be treated as a deletion.
 Future<MergeResult> computeMerge(
   SyncClient client,
   String name,
   Directory localRoot,
   Manifest base,
 ) async {
+  if (!localRoot.existsSync() && base.entries.isNotEmpty) {
+    throw MissingRootException(localRoot.path);
+  }
+
   final remote = await client.fetchManifest(name);
   final local = localRoot.existsSync()
       ? await Manifest.scan(localRoot)
