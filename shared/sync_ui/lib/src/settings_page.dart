@@ -3,6 +3,9 @@ import 'package:package_info_plus/package_info_plus.dart';
 
 import '../l10n/gen/app_localizations.dart';
 import 'app_settings.dart';
+import 'layout.dart';
+import 'rename_dialog.dart';
+import 'sync_folder_page.dart';
 import 'autostart.dart';
 import 'storage.dart';
 
@@ -12,9 +15,25 @@ const String kDeveloper = 'Axawys';
 
 /// Appearance, sync behaviour, startup, and what this app actually is.
 class SettingsPage extends StatefulWidget {
-  const SettingsPage({super.key, required this.settings});
+  const SettingsPage({
+    super.key,
+    required this.settings,
+    this.folders,
+    this.deviceName,
+    this.onRename,
+  });
 
   final AppSettings settings;
+
+  /// This device's name and how to change it. What every other device shows
+  /// for this one, so it belongs among the settings rather than nowhere.
+  final String? deviceName;
+  final Future<void> Function(String name)? onRename;
+
+  /// What this device offers. The same choice as on the devices screen, in the
+  /// place people go looking for settings - it is one setting, and it is worth
+  /// being findable twice rather than nowhere.
+  final SharedFolders? folders;
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
@@ -63,7 +82,8 @@ class _SettingsPageState extends State<SettingsPage> {
 
     return Scaffold(
       appBar: AppBar(title: Text(l10n.settingsTitle)),
-      body: ListView(
+      body: ContentPane(
+        child: ListView(
         children: [
           _Heading(l10n.sectionAppearance),
           ListTile(
@@ -118,6 +138,47 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           const Divider(),
 
+          if (widget.deviceName != null) ...[
+            _Heading(l10n.deviceName),
+            ListTile(
+              leading: const Icon(Icons.badge_outlined),
+              title: Text(widget.deviceName!),
+              subtitle: Text(l10n.deviceNameHint),
+              trailing: const Icon(Icons.edit_outlined),
+              onTap: () => renameDeviceDialog(
+                context,
+                current: widget.deviceName!,
+                onRename: widget.onRename,
+              ),
+            ),
+            const Divider(),
+          ],
+
+          _Heading(l10n.syncFolderTitle),
+          if (widget.folders != null)
+            ListenableBuilder(
+              listenable: widget.folders!,
+              builder: (context, _) {
+                final shared = widget.folders!.folder;
+                return ListTile(
+                  leading: const Icon(Icons.folder_shared),
+                  title:
+                      Text(shared?.name ?? l10n.syncFolderChoose),
+                  subtitle: Text(shared == null
+                      ? l10n.syncFolderNone
+                      : prettyPath(shared.path)),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (_) =>
+                          SyncFolderPage(folders: widget.folders!),
+                    ),
+                  ),
+                );
+              },
+            ),
+          const Divider(),
+
           _Heading(l10n.sectionSyncing),
           SwitchListTile(
             title: Text(l10n.plainSync),
@@ -157,6 +218,7 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ),
         ],
+        ),
       ),
     );
   }
@@ -169,7 +231,8 @@ class _Heading extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
+      padding: const EdgeInsets.fromLTRB(
+          Layout.gutter, Layout.gutter, Layout.gutter, Layout.tight),
       child: Text(
         label,
         style: Theme.of(context).textTheme.titleSmall?.copyWith(

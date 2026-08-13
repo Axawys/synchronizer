@@ -23,6 +23,8 @@ abstract final class SessionType {
 
   static const listDirs = 'dirs.list';
   static const dirs = 'dirs';
+  static const prepareDir = 'dir.prepare';
+  static const dirReady = 'dir.ready';
   static const getManifest = 'manifest.get';
   static const manifest = 'manifest';
   static const getFile = 'file.get';
@@ -36,11 +38,87 @@ abstract final class SessionType {
   static const error = 'error';
 }
 
-/// A directory this device offers to a peer, addressed by [name]. The path is
-/// local and never leaves the device.
+/// A directory this device offers to a peer, addressed by [name].
 class SharedDir {
-  const SharedDir(this.name);
+  const SharedDir(
+    this.name, {
+    this.path,
+    this.files,
+    this.bytes,
+    this.missing = false,
+  });
+
   final String name;
+
+  /// Where the device that offers it keeps it, as that device sees it.
+  ///
+  /// It used to stay at home on principle. The principle cost more than it was
+  /// worth: the folder being the wrong folder is the one failure that looks
+  /// exactly like success - "already in sync" over an empty vault - and the
+  /// path is what settles it at a glance. It only ever goes to a device that
+  /// has been paired with and has authenticated, and it says nothing that
+  /// device could not learn by asking for the folder's contents.
+  ///
+  /// Null from a device too old to say.
+  final String? path;
+
+  /// How many files it holds, and what they weigh, when the far end said. Null
+  /// from a device too old to say, which is not the same as zero and must not
+  /// be shown as one.
+  final int? files;
+  final int? bytes;
+
+  /// The folder is shared but no longer there. Worth saying out loud: a folder
+  /// that has moved or is on an unmounted drive otherwise reads as an empty
+  /// one, and an empty folder is a legitimate thing to sync.
+  final bool missing;
+}
+
+/// Which folders are being synced right now, so two devices cannot work on the
+/// same one at once.
+///
+/// Every write already refuses to go over something it did not expect, which is
+/// what keeps data safe. This is the other half: two devices syncing the same
+/// folder at the same moment would otherwise both do half a sync and report a
+/// pile of failures each. One at a time, and the second is told why.
+class FolderLocks {
+  final _held = <String, Object>{};
+
+  /// Takes the folder for one session, or returns false if a different device
+  /// has it.
+  ///
+  /// The same device syncing again takes over from itself: a session that just
+  /// ended may not have been noticed yet - a socket closing is not instant -
+  /// and telling a device it is competing with itself would make every second
+  /// sync fail.
+  bool take(String folder, Object holder) {
+    final current = _held[folder];
+    if (current != null && current != holder) return false;
+    _held[folder] = holder;
+    return true;
+  }
+
+  /// Gives the folder back, unless someone else has since taken it - which is
+  /// what a slow disconnect looks like from here.
+  void release(String folder, Object holder) {
+    if (_held[folder] == holder) _held.remove(folder);
+  }
+
+  bool isBusy(String folder) => _held.containsKey(folder);
+}
+
+/// A paired device asking this one to make a folder available under [folder].
+///
+/// It arrives when the other device wants to sync something this one does not
+/// offer yet - most of the time because nobody has said where it should live
+/// here. Only the person holding this device can answer that, so the app puts a
+/// folder chooser in front of them; the device that asked is told to wait and
+/// watch for the folder appearing.
+class FolderRequest {
+  const FolderRequest({required this.folder, required this.peerId});
+
+  final String folder;
+  final String peerId;
 }
 
 /// Supplies the directories the session server will serve, and resolves a name
@@ -88,13 +166,16 @@ class SyncClient {
 
   /// Connects to [host]:[port], authenticates as [self] using the shared secret
   /// from [trusted], and verifies the server proves the same secret back.
+  /// [cancel] gives up on a device that is not answering: the attempt is
+  /// dropped where it stands rather than run to its timeout.
   static Future<SyncClient> connect(
     String host,
     int port, {
     required DeviceInfo self,
     required TrustedPeer trusted,
+    Future<void>? cancel,
   }) async {
-    final conn = await PeerConnection.connect(host, port);
+    final conn = await PeerConnection.connect(host, port, cancel: cancel);
     final frames = StreamIterator(conn.frames);
     try {
       conn.send({'type': SessionType.hello, 'deviceId': self.id});
@@ -143,7 +224,24 @@ class SyncClient {
     _conn.send({'type': SessionType.listDirs});
     final reply = await _expect(_frames, SessionType.dirs, _conn);
     final list = (reply.header['dirs']! as List).cast<Map<String, Object?>>();
-    return list.map((d) => SharedDir(d['name']! as String)).toList();
+    return list
+        .map((d) => SharedDir(
+              d['name']! as String,
+              path: d['path'] as String?,
+              files: d['files'] as int?,
+              bytes: d['bytes'] as int?,
+              missing: d['missing'] == true,
+            ))
+        .toList();
+  }
+
+  /// Asks the peer whether it has a place for [name], and to choose one if it
+  /// has not. False means the question has been put to the person holding that
+  /// device; the folder appears in its listing once they answer.
+  Future<bool> prepareDirectory(String name) async {
+    _conn.send({'type': SessionType.prepareDir, 'name': name});
+    final reply = await _expect(_frames, SessionType.dirReady, _conn);
+    return reply.header['ready'] == true;
   }
 
   /// Fetches the peer's current manifest for [name].
@@ -177,19 +275,40 @@ class SyncClient {
   ///
   /// The content hash travels with the request so the peer can reject a body
   /// that arrived corrupted instead of writing it into the vault.
-  Future<void> putFile(String name, String path, List<int> bytes) async {
+  /// Writes [bytes] into the peer's [name] at [path].
+  ///
+  /// [expect] is the hash of what this device believed was there when it worked
+  /// out that this write was the right thing to do - null meaning "nothing was
+  /// there". The peer checks it and refuses if reality has moved on, which is
+  /// the difference between two devices syncing at once and one of them quietly
+  /// undoing the other's work.
+  Future<void> putFile(
+    String name,
+    String path,
+    List<int> bytes, {
+    String? expect,
+    bool expectAbsent = false,
+  }) async {
     _conn.send({
       'type': SessionType.putFile,
       'name': name,
       'path': path,
       'hash': sha256.convert(bytes).toString(),
+      if (expect != null) 'expect': expect,
+      if (expectAbsent) 'expectAbsent': true,
     }, bytes);
     await _expectAck('file put');
   }
 
-  /// Deletes [path] inside the peer's shared directory [name].
-  Future<void> deleteFile(String name, String path) async {
-    _conn.send({'type': SessionType.deleteFile, 'name': name, 'path': path});
+  /// Deletes [path] inside the peer's shared directory [name], if it is still
+  /// the file this device decided to delete - see [putFile] for why.
+  Future<void> deleteFile(String name, String path, {String? expect}) async {
+    _conn.send({
+      'type': SessionType.deleteFile,
+      'name': name,
+      'path': path,
+      if (expect != null) 'expect': expect,
+    });
     await _expectAck('file delete');
   }
 
@@ -218,6 +337,8 @@ Future<void> handleSession(
   required DeviceInfo self,
   required TrustStore trust,
   required DirectorySource directories,
+  void Function(FolderRequest)? onFolderRequest,
+  FolderLocks? locks,
 }) async {
   final peerId = hello.header['deviceId'];
   final trusted = peerId is String ? await trust.get(peerId) : null;
@@ -247,27 +368,100 @@ Future<void> handleSession(
     'mac': _mac(trusted.secret, 'server:$clientNonce'),
   });
 
-  while (await frames.moveNext()) {
-    final request = frames.current;
-    switch (request.type) {
-      case SessionType.listDirs:
-        conn.send({
-          'type': SessionType.dirs,
-          'dirs': directories.list().map((d) => {'name': d.name}).toList(),
-        });
-      case SessionType.getManifest:
-        await _serveManifest(conn, directories, request);
-      case SessionType.getFile:
-        await _serveFile(conn, directories, request);
-      case SessionType.putFile:
-        await _servePut(conn, directories, request);
-      case SessionType.deleteFile:
-        await _serveDelete(conn, directories, request);
-      default:
-        conn.send({'type': SessionType.error, 'message': 'unknown request'});
+  // Folders this session took, so they are given back however it ends.
+  final held = <String>{};
+
+  try {
+    while (await frames.moveNext()) {
+      final request = frames.current;
+
+      // Anything that names a folder claims it for this session: a sync is a
+      // conversation about one folder, and two at once are two half-syncs.
+      final folder = request.header['name'];
+      if (folder is String && folder.isNotEmpty && !held.contains(folder)) {
+        if (locks != null && !locks.take(folder, trusted.id)) {
+          conn.send({
+            'type': SessionType.error,
+            'message': 'that folder is syncing with another device right now',
+          });
+          continue;
+        }
+        held.add(folder);
+      }
+
+      switch (request.type) {
+        case SessionType.listDirs:
+          await _serveDirs(conn, directories);
+        case SessionType.prepareDir:
+          _servePrepare(
+              conn, directories, request, trusted.id, onFolderRequest);
+        case SessionType.getManifest:
+          await _serveManifest(conn, directories, request);
+        case SessionType.getFile:
+          await _serveFile(conn, directories, request);
+        case SessionType.putFile:
+          await _servePut(conn, directories, request);
+        case SessionType.deleteFile:
+          await _serveDelete(conn, directories, request);
+        default:
+          conn.send({'type': SessionType.error, 'message': 'unknown request'});
+      }
+    }
+  } finally {
+    for (final folder in held) {
+      locks?.release(folder, trusted.id);
     }
   }
   await conn.close();
+}
+
+/// The folders this device offers, each with where it is and how much is in it.
+///
+/// The measurement costs a walk of the directory, which is worth it: it is what
+/// lets the other device show "1.2 GB there, nothing here" before anything is
+/// tapped, and it is the difference between a sync that explains itself and one
+/// that says "nothing to do" over an empty folder nobody meant to share.
+Future<void> _serveDirs(
+  PeerConnection conn,
+  DirectorySource directories,
+) async {
+  final dirs = <Map<String, Object?>>[];
+  for (final dir in directories.list()) {
+    final path = directories.pathOf(dir.name);
+    final root = path == null ? null : Directory(path);
+    final exists = root?.existsSync() ?? false;
+    final size = exists ? await Manifest.measure(root!) : null;
+    dirs.add({
+      'name': dir.name,
+      'missing': !exists,
+      if (path != null) 'path': path,
+      if (size != null) 'files': size.files,
+      if (size != null) 'bytes': size.bytes,
+    });
+  }
+  conn.send({'type': SessionType.dirs, 'dirs': dirs});
+}
+
+/// Answers whether this device has somewhere to keep [name], and asks its user
+/// if it does not.
+///
+/// The answer comes back at once either way. Choosing a folder takes as long as
+/// a person takes, and holding a connection open across that is a connection
+/// that will time out; the asking device is told "not yet" and looks again.
+void _servePrepare(
+  PeerConnection conn,
+  DirectorySource directories,
+  Frame request,
+  String peerId,
+  void Function(FolderRequest)? onFolderRequest,
+) {
+  final name = request.header['name']?.toString() ?? '';
+  final ready = name.isNotEmpty && directories.pathOf(name) != null;
+  conn.send({'type': SessionType.dirReady, 'ready': ready});
+
+  if (!ready && name.isNotEmpty) {
+    onFolderRequest?.call(FolderRequest(folder: name, peerId: peerId));
+  }
 }
 
 Future<void> _serveManifest(
@@ -280,7 +474,21 @@ Future<void> _serveManifest(
     conn.send({'type': SessionType.error, 'message': 'no such directory'});
     return;
   }
-  final manifest = await Manifest.scan(Directory(path));
+
+  // A folder that is shared but not there is not an empty folder. Scanning it
+  // would answer "no files", the other device would take that for the truth,
+  // and a sync in that state deletes a vault. The local side already refuses
+  // this (MissingRootException); the serving side has to refuse it too.
+  final root = Directory(path);
+  if (!root.existsSync()) {
+    conn.send({
+      'type': SessionType.error,
+      'message': 'the shared folder is missing on that device',
+    });
+    return;
+  }
+
+  final manifest = await Manifest.scan(root);
   conn.send({'type': SessionType.manifest}, utf8.encode(manifest.encode()));
 }
 
@@ -339,15 +547,51 @@ Future<void> _servePut(
     return;
   }
 
+  final target = File(resolved);
+  final stale = await _movedOn(target, request);
+  if (stale != null) {
+    conn.send({'type': SessionType.error, 'message': stale});
+    return;
+  }
+
   // Same atomic write as applyChanges: temp file then rename, so an interrupted
   // push never leaves a half-written file in the peer's vault.
-  final target = File(resolved);
   await target.parent.create(recursive: true);
   final temp = File('$resolved.synctmp');
   await temp.writeAsBytes(request.body, flush: true);
   await temp.rename(resolved);
 
   conn.send({'type': SessionType.ack, 'path': rel});
+}
+
+/// Whether the file is no longer what the other device thought it was.
+///
+/// A sync is worked out against a snapshot and applied a moment later. In
+/// between, the file can be edited here or written by a third device syncing at
+/// the same time - and carrying out the old plan would then throw away work
+/// nobody chose to lose. The writer says what it expected to find; if it is not
+/// there any more, the write is refused and the sync reports a failure, which
+/// leaves the agreed ancestor where it was so the next run sees a real
+/// conflict instead of a silent deletion.
+///
+/// Returns why it was refused, or null to go ahead.
+Future<String?> _movedOn(File target, Frame request) async {
+  final expected = request.header['expect'];
+  final expectAbsent = request.header['expectAbsent'] == true;
+  if (expected is! String && !expectAbsent) return null; // nothing claimed
+
+  final exists = target.existsSync();
+  if (expectAbsent) {
+    return exists
+        ? 'a file appeared there since this sync was worked out'
+        : null;
+  }
+  if (!exists) return 'the file was removed since this sync was worked out';
+
+  final actual = sha256.convert(await target.readAsBytes()).toString();
+  return actual == expected
+      ? null
+      : 'the file changed since this sync was worked out';
 }
 
 Future<void> _serveDelete(
@@ -368,6 +612,12 @@ Future<void> _serveDelete(
   }
 
   final file = File(resolved);
+  final stale = await _movedOn(file, request);
+  if (stale != null) {
+    conn.send({'type': SessionType.error, 'message': stale});
+    return;
+  }
+
   if (file.existsSync()) await file.delete();
   // A folder deleted on the peer arrives as deletions of the files inside it;
   // clear out the directories that are now empty so the folder really goes.

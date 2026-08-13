@@ -80,6 +80,62 @@ void main() {
     return result;
   }
 
+  testWidgets('files about to be deleted on the other device are warned about',
+      (tester) async {
+    final preview = SyncPreview(
+      files: [
+        FilePreview(
+          item: item('gone.md', MergeKind.pushToRemote),
+          kind: PreviewKind.delete,
+          side: PreviewSide.there,
+        ),
+        FilePreview(
+          item: item('also-gone.md', MergeKind.pushToRemote),
+          kind: PreviewKind.delete,
+          side: PreviewSide.there,
+        ),
+        FilePreview(
+          item: item('arriving.md', MergeKind.pullToLocal),
+          kind: PreviewKind.create,
+          side: PreviewSide.here,
+        ),
+      ],
+      folders: const [],
+    );
+
+    await show(tester, preview);
+
+    // Before anything else on the screen, and named as the thing that cannot
+    // be taken back.
+    expect(find.text('2 files will be deleted on Desktop'), findsOneWidget);
+    expect(find.textContaining('deleted, not moved'), findsOneWidget);
+
+    // And the rows themselves read as losses: same colour as the warning.
+    final theme = Theme.of(tester.element(find.text('gone.md')));
+    final row = tester.widget<Text>(find.text('gone.md'));
+    expect(row.style?.color, theme.colorScheme.error);
+    final arriving = tester.widget<Text>(find.text('arriving.md'));
+    expect(arriving.style?.color, isNot(theme.colorScheme.error));
+  });
+
+  testWidgets('a sync that deletes nothing says nothing about deleting',
+      (tester) async {
+    final preview = SyncPreview(
+      files: [
+        FilePreview(
+          item: item('arriving.md', MergeKind.pullToLocal),
+          kind: PreviewKind.create,
+          side: PreviewSide.here,
+        ),
+      ],
+      folders: const [],
+    );
+
+    await show(tester, preview);
+
+    expect(find.textContaining('will be deleted'), findsNothing);
+  });
+
   testWidgets('shows the lines a file gains and loses', (tester) async {
     final preview = SyncPreview(
       files: [

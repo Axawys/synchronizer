@@ -21,7 +21,10 @@ class PeerServer {
     DirectorySource? directories,
   }) : directories = directories ?? MapDirectorySource(const {});
 
-  final DeviceInfo self;
+  /// How this device introduces itself in a handshake. Not final: the user can
+  /// rename the device, and the next device to pair should hear the new name.
+  DeviceInfo self;
+
   final TrustStore trust;
   final int port;
 
@@ -34,6 +37,20 @@ class PeerServer {
 
   /// Inbound pairing requests awaiting the user's accept/reject.
   Stream<IncomingPairing> get pairingRequests => _pairingRequests.stream;
+
+  /// The token behind a QR code this device is showing, if any. A request that
+  /// proves it read that code is accepted without asking; set it while the code
+  /// is on screen and clear it when it comes off.
+  QrPairingToken? qrToken;
+
+  /// Which folders are being synced right now: one device at a time per folder.
+  final _locks = FolderLocks();
+
+  final _folderRequests = StreamController<FolderRequest>.broadcast();
+
+  /// Paired devices asking this one to make a folder available. The app answers
+  /// by putting a folder chooser in front of the user.
+  Stream<FolderRequest> get folderRequests => _folderRequests.stream;
 
   /// The port actually bound. Differs from [port] only when 0 was requested to
   /// get an ephemeral port (used in tests).
@@ -62,6 +79,7 @@ class PeerServer {
             self: self,
             trust: trust,
             emit: _pairingRequests.add,
+            qrToken: qrToken,
           );
         case SessionType.hello:
           await handleSession(
@@ -71,6 +89,8 @@ class PeerServer {
             self: self,
             trust: trust,
             directories: directories,
+            onFolderRequest: _folderRequests.add,
+            locks: _locks,
           );
         default:
           await closeConnection(conn, frames);
@@ -84,5 +104,6 @@ class PeerServer {
     await _server?.close();
     _server = null;
     if (!_pairingRequests.isClosed) await _pairingRequests.close();
+    if (!_folderRequests.isClosed) await _folderRequests.close();
   }
 }

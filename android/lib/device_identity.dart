@@ -13,6 +13,14 @@ const int kSyncServicePort = 47800;
 class DeviceIdentity {
   static const _channel = MethodChannel('synchronizer/device');
 
+  /// Renames this device. The name is what every other device shows for it, so
+  /// it is announced again as soon as this returns; the id does not change,
+  /// which is what keeps existing pairings intact.
+  static Future<void> rename(String name) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('device_name', name);
+  }
+
   static Future<DeviceInfo> load() async {
     final prefs = await SharedPreferences.getInstance();
 

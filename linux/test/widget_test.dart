@@ -26,7 +26,9 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('This device: test-desktop'), findsOneWidget);
+    // The name and what it is are two things on the card now, not one line.
+    expect(find.text('test-desktop'), findsOneWidget);
+    expect(find.text('This device'), findsOneWidget);
     expect(find.text('Looking for devices…'), findsOneWidget);
   });
 
@@ -64,7 +66,9 @@ void main() {
     expect(find.text('Synchronizer'), findsOneWidget); // the rail's header
     expect(selected(), 0);
 
-    await tester.tap(find.text('Folders'));
+    // Folders used to be the middle destination; it lives on the device that
+    // owns it now, and Direct has the place.
+    await tester.tap(find.text('Direct'));
     await tester.pump();
     expect(selected(), 1);
 

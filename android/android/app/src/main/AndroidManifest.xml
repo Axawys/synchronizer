@@ -6,6 +6,22 @@
     <!-- Required to hold a multicast lock so inbound UDP announcements arrive. -->
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"/>
 
+    <!-- Reading the pairing code shown on the other device. The scanner plugin
+         declares this too; saying it here keeps it visible where the app's own
+         permissions are listed. -->
+    <uses-permission android:name="android.permission.CAMERA"/>
+
+    <!-- Hosting a local-only hotspot, so two devices with no shared network can
+         still reach each other. The system picks its name and password and it
+         carries no internet; these are what it asks for in return. -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE"/>
+    <!-- Joining the network named in a scanned QR code, for this app only. -->
+    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE"/>
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"
+        android:maxSdkVersion="32"/>
+    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation"/>
+
     <!-- All-files access, so synced folders can live in normal storage (e.g.
          Documents) where other apps like Obsidian can open them. Personal
          build: this is not accepted for Google Play distribution. -->

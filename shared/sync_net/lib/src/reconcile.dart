@@ -5,6 +5,7 @@ import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 import 'package:sync_core/sync_core.dart';
 
+import 'progress.dart';
 import 'session.dart';
 
 /// A [MergeItem] together with how it will be applied.
@@ -171,16 +172,22 @@ Future<MergeResult> computeMerge(
   SyncClient client,
   String name,
   Directory localRoot,
-  Manifest base,
-) async {
+  Manifest base, {
+  SyncProgressCallback? onProgress,
+}) async {
   if (!localRoot.existsSync() && base.entries.isNotEmpty) {
     throw MissingRootException(localRoot.path);
   }
 
+  onProgress?.call(const SyncProgress(SyncPhase.asking));
   final remote = await client.fetchManifest(name);
+
+  onProgress?.call(const SyncProgress(SyncPhase.scanning));
   final local = localRoot.existsSync()
       ? await Manifest.scan(localRoot)
       : Manifest(<String, FileEntry>{});
+
+  onProgress?.call(const SyncProgress(SyncPhase.comparing));
   return threeWayMerge(base, local, remote);
 }
 
@@ -248,7 +255,13 @@ Future<MergeReport> applyMerge(
       if (merged != null) {
         // A merged file is the same on both sides now, so it goes both ways.
         await _writeLocal(localRoot, item.path, merged);
-        await client.putFile(name, item.path, merged);
+        await client.putFile(
+          name,
+          item.path,
+          merged,
+          expect: item.remote?.hash,
+          expectAbsent: item.remote == null,
+        );
       } else if (r.toLocal) {
         // Bring the remote's version here.
         if (item.remote == null) {
@@ -264,11 +277,20 @@ Future<MergeReport> applyMerge(
       } else {
         // Send this device's version to the remote. putFile sends the hash with
         // it, so the peer rejects a corrupted body.
+        // Every write says what it expected to find there, so a plan made
+        // against a file that has since changed - by an edit on that device or
+        // by a third device syncing at the same time - is refused rather than
+        // carried out over the top of it.
         if (item.local == null) {
-          await client.deleteFile(name, item.path);
+          await client.deleteFile(name, item.path, expect: item.remote?.hash);
         } else {
           await client.putFile(
-              name, item.path, await _readLocal(localRoot, item.path));
+            name,
+            item.path,
+            await _readLocal(localRoot, item.path),
+            expect: item.remote?.hash,
+            expectAbsent: item.remote == null,
+          );
         }
       }
       applied++;

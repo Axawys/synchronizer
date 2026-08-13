@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:sync_core/sync_core.dart';
 
+import 'progress.dart';
 import 'reconcile.dart';
 import 'session.dart';
 
@@ -94,11 +95,17 @@ Future<SyncPreview> buildPreview(
   SyncClient client,
   String name,
   Directory localRoot,
-  MergeResult merge,
-) async {
+  MergeResult merge, {
+  SyncProgressCallback? onProgress,
+}) async {
   final files = <FilePreview>[];
+  final total = merge.items.length;
 
   for (final item in merge.items) {
+    // Reported before each file rather than after: the count on screen should
+    // name the file being waited for, not the one already done.
+    onProgress?.call(
+        SyncProgress(SyncPhase.reading, done: files.length, total: total));
     files.add(switch (item.kind) {
       MergeKind.pullToLocal =>
         await _oneWay(client, name, localRoot, item, toLocal: true),
@@ -108,6 +115,7 @@ Future<SyncPreview> buildPreview(
     });
   }
 
+  onProgress?.call(SyncProgress(SyncPhase.reading, done: total, total: total));
   return SyncPreview(files: files, folders: _folders(files, localRoot));
 }
 

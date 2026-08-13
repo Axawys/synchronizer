@@ -4,6 +4,15 @@ import 'dart:typed_data';
 
 import 'frame.dart';
 
+/// Thrown where a connection or a handshake was called off by the person who
+/// started it. Not a failure to report - it is what they asked for.
+class SyncCancelled implements Exception {
+  const SyncCancelled();
+
+  @override
+  String toString() => 'SyncCancelled';
+}
+
 /// How long a link may stay completely silent while we are waiting for an
 /// answer before we give up on it.
 ///
@@ -92,13 +101,43 @@ class PeerConnection {
     socket.destroy();
   }
 
+  /// Opens a link to [host]:[port].
+  ///
+  /// [cancel] gives the caller a way out while it is still trying. A connection
+  /// attempt to a device that is not there takes the full [timeout] to fail,
+  /// and a person who has changed their mind should not have to sit through it;
+  /// completing that future gives up the attempt at once.
   static Future<PeerConnection> connect(
     String host,
     int port, {
     Duration timeout = const Duration(seconds: 10),
+    Future<void>? cancel,
   }) async {
-    final socket = await Socket.connect(host, port, timeout: timeout);
-    return PeerConnection(socket);
+    if (cancel == null) {
+      final socket = await Socket.connect(host, port, timeout: timeout);
+      return PeerConnection(socket);
+    }
+
+    // startConnect, not connect: it hands back the attempt itself, which is the
+    // only thing that can actually be called off.
+    final task = await Socket.startConnect(host, port);
+    var cancelled = false;
+    unawaited(cancel.then((_) {
+      cancelled = true;
+      task.cancel();
+    }));
+
+    try {
+      final socket = await task.socket.timeout(timeout);
+      if (cancelled) {
+        socket.destroy();
+        throw const SyncCancelled();
+      }
+      return PeerConnection(socket);
+    } on SocketException {
+      if (cancelled) throw const SyncCancelled();
+      rethrow;
+    }
   }
 }
 

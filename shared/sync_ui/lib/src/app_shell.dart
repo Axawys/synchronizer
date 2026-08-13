@@ -6,16 +6,25 @@ import 'package:sync_net/sync_net.dart';
 import '../l10n/gen/app_localizations.dart';
 
 import 'app_settings.dart';
+import 'direct_connect_page.dart';
+import 'direct_link.dart';
+import 'qr_pairing.dart';
 import 'home.dart';
 import 'prefs_trust_store.dart';
 import 'settings_page.dart';
-import 'shared_folders_page.dart';
 import 'storage.dart';
 
 /// The three places in the app.
+///
+/// Folders used to be one of them, and it was a tab nobody had reason to open
+/// until something did not work - while being the one setting everything else
+/// depends on. It now sits on the device it belongs to, on the first screen,
+/// and again in settings. Direct took its place: it is a way of reaching a
+/// device rather than a mode of the device list, and a switch inside one tab
+/// hid it from anyone who had not already gone looking.
 enum _Destination {
   sync(Icons.sync),
-  folders(Icons.folder),
+  direct(Icons.cable),
   settings(Icons.settings);
 
   const _Destination(this.icon);
@@ -25,7 +34,7 @@ enum _Destination {
   /// constant is fixed at compile time and the language is not.
   String label(AppLocalizations l10n) => switch (this) {
         _Destination.sync => l10n.navSync,
-        _Destination.folders => l10n.navFolders,
+        _Destination.direct => l10n.directModeDirect,
         _Destination.settings => l10n.navSettings,
       };
 }
@@ -43,12 +52,26 @@ class HomeShell extends StatefulWidget {
     required this.self,
     required this.settings,
     this.prepareNetwork,
+    this.directLink,
+    this.qrScanner,
+    this.onRename,
     this.autoStart = true,
   });
 
   final DeviceInfo self;
+
+  /// Renames this device, everywhere at once.
+  final Future<void> Function(String name)? onRename;
   final AppSettings settings;
   final Future<void> Function()? prepareNetwork;
+
+  /// Handed to the devices screen, which offers what the platform can do about
+  /// making a direct link. Null on the desktop, which can do none of it.
+  final DirectLinkControls? directLink;
+
+  /// The camera that reads a pairing code, where there is one.
+  final QrScanner? qrScanner;
+
   final bool autoStart;
 
   @override
@@ -58,18 +81,95 @@ class HomeShell extends StatefulWidget {
 class _HomeShellState extends State<HomeShell> {
   final TrustStore _trust = PrefsTrustStore();
   final SharedFolders _folders = SharedFolders();
+
+  /// The networking, owned here rather than by the devices screen: both tabs
+  /// need it now. The direct screen shows a code the server must honour, and
+  /// the device list shows what discovery finds - one server and one discovery
+  /// between them, started once and stopped once.
+  late final DiscoveryService _discovery;
+  late final PeerServer _server;
+  AppLifecycleListener? _lifecycle;
+
+  /// Whether the network could be opened at all. Watched by the devices screen,
+  /// which is where a failure is worth reporting.
+  final ValueNotifier<bool> _networkFailed = ValueNotifier(false);
+
+  /// What this app's traffic was pinned to, when it had to be. Null when
+  /// nothing was in the way.
+  final ValueNotifier<String?> _boundTo = ValueNotifier(null);
+
   int _index = 0;
 
   @override
   void initState() {
     super.initState();
-    if (widget.autoStart) _folders.load();
+    _discovery = DiscoveryService(widget.self);
+    _server = PeerServer(
+      widget.self,
+      _trust,
+      port: widget.self.port,
+      directories: _folders,
+    );
+    if (widget.autoStart) {
+      _folders.load();
+      // Closing the app should take this device off other people's lists right
+      // away; coming back to it should look again, since the phone may have
+      // changed network while it was away.
+      _lifecycle = AppLifecycleListener(
+        onDetach: _shutdown,
+        onResume: _discovery.refresh,
+      );
+      startNetworking();
+    }
+  }
+
+  Future<void> startNetworking() async {
+    await widget.prepareNetwork?.call();
+    // Before opening a single socket: if a VPN is carrying this device's
+    // traffic, the other device is not in that tunnel. Binding this app to the
+    // local network puts it back on the network the other device is on, and
+    // leaves every other app on the VPN.
+    _boundTo.value = await widget.directLink?.bindToLocalNetwork();
+    try {
+      await _discovery.start();
+      await _server.start();
+      _networkFailed.value = false;
+    } catch (_) {
+      // Nearly always the port already being held by another copy of the app.
+      _networkFailed.value = true;
+    }
+  }
+
+  bool _stopped = false;
+
+  void _shutdown() {
+    if (_stopped) return;
+    _stopped = true;
+    _discovery.dispose(); // announces our goodbye, then closes the stream
+    _server.stop();
   }
 
   @override
   void dispose() {
+    _lifecycle?.dispose();
+    _shutdown();
+    widget.directLink?.releaseNetwork();
+    _networkFailed.dispose();
+    _boundTo.dispose();
     _folders.dispose();
     super.dispose();
+  }
+
+  @override
+  void didUpdateWidget(HomeShell old) {
+    super.didUpdateWidget(old);
+    // A rename above has to reach the running services: the name travels in
+    // every announcement and in the pairing handshake, and both hold their own
+    // copy of who we are.
+    if (old.self.name != widget.self.name) {
+      _discovery.rename(widget.self.name);
+      _server.self = widget.self;
+    }
   }
 
   void _select(int index) => setState(() => _index = index);
@@ -83,13 +183,30 @@ class _HomeShellState extends State<HomeShell> {
       children: [
         DevicesPage(
           self: widget.self,
+          onRename: widget.onRename,
           trust: _trust,
           folders: _folders,
-          prepareNetwork: widget.prepareNetwork,
-          autoStart: widget.autoStart,
+          discovery: _discovery,
+          server: _server,
+          networkFailed: _networkFailed,
+          boundToLocalNetwork: _boundTo,
+          onRetryNetwork: startNetworking,
         ),
-        SharedFoldersPage(folders: _folders),
-        SettingsPage(settings: widget.settings),
+        DirectConnectPage(
+          self: widget.self,
+          trust: _trust,
+          folders: _folders,
+          links: widget.directLink,
+          scanner: widget.qrScanner,
+          server: _server,
+          autoLoad: widget.autoStart,
+        ),
+        SettingsPage(
+          settings: widget.settings,
+          folders: _folders,
+          deviceName: widget.self.name,
+          onRename: widget.onRename,
+        ),
       ],
     );
 
@@ -137,7 +254,6 @@ class _HomeShellState extends State<HomeShell> {
 /// The app's name above the rail's destinations.
 class _RailHeader extends StatelessWidget {
   const _RailHeader();
-
   @override
   Widget build(BuildContext context) {
     return Padding(

@@ -20,7 +20,9 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('This device: test-phone'), findsOneWidget);
+    // The name and what it is are two things on the card now, not one line.
+    expect(find.text('test-phone'), findsOneWidget);
+    expect(find.text('This device'), findsOneWidget);
     expect(find.text('Looking for devices…'), findsOneWidget);
   });
 }

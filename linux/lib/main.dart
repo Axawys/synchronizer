@@ -11,5 +11,6 @@ Future<void> main() async {
   runApp(SynchronizerApp(
     self: self,
     applyWindowBrightness: WindowFrame.applyBrightness,
+    onRename: DeviceIdentity.rename,
   ));
 }

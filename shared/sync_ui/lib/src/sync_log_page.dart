@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../l10n/gen/app_localizations.dart';
 
+import 'layout.dart';
 import 'storage.dart';
 
 /// The sync history: what was reconciled, with which device, and when.
@@ -56,10 +57,15 @@ class _SyncLogPageState extends State<SyncLogPage> {
                     child: Text(l10n.nothingSyncedYet),
                   ),
                 )
-              : ListView.separated(
-                  itemCount: entries.length,
-                  separatorBuilder: (_, _) => const Divider(height: 1),
-                  itemBuilder: (context, i) => _EntryTile(entry: entries[i]),
+              : ContentPane(
+                  child: ListView.separated(
+                    padding: const EdgeInsets.fromLTRB(Layout.gutter,
+                        Layout.gap, Layout.gutter, Layout.section),
+                    itemCount: entries.length,
+                    separatorBuilder: (_, _) =>
+                        const SizedBox(height: Layout.gap),
+                    itemBuilder: (context, i) => _EntryTile(entry: entries[i]),
+                  ),
                 ),
     );
   }
@@ -73,19 +79,46 @@ class _EntryTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final failed = entry.failed > 0;
+    final theme = Theme.of(context);
+    final colors = theme.colorScheme;
     final l10n = AppLocalizations.of(context);
-    return ListTile(
-      leading: Icon(
-        failed ? Icons.error_outline : Icons.check_circle_outline,
-        color: failed
-            ? Theme.of(context).colorScheme.error
-            : Theme.of(context).colorScheme.primary,
-      ),
-      title: Text('${entry.folder} — ${entry.peerName}'),
-      subtitle: Text(_summary(l10n)),
-      trailing: Text(
-        _when(entry.at),
-        style: Theme.of(context).textTheme.bodySmall,
+
+    return AppCard(
+      child: Row(
+        children: [
+          Icon(
+            failed ? Icons.error_outline : Icons.check_circle_outline,
+            color: failed ? colors.error : colors.primary,
+          ),
+          const SizedBox(width: Layout.gap),
+          Expanded(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${entry.folder} — ${entry.peerName}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.titleSmall
+                      ?.copyWith(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: Layout.tight),
+                Text(
+                  _summary(l10n),
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: colors.onSurfaceVariant),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: Layout.snug),
+          Text(
+            _when(entry.at),
+            style: theme.textTheme.bodySmall
+                ?.copyWith(color: colors.onSurfaceVariant),
+          ),
+        ],
       ),
     );
   }

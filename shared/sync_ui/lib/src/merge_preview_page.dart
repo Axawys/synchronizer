@@ -120,6 +120,16 @@ class _MergePreviewPageState extends State<MergePreviewPage> {
       ),
       body: ListView(
         children: [
+          // Deletions first, and loudly. Everything else on this screen can be
+          // undone by syncing again; a file deleted on the other device is
+          // gone, and the person applying this is usually looking for the
+          // changes they made, not for the ones they are about to lose.
+          if (_deletionsThere.isNotEmpty || _deletionsHere.isNotEmpty)
+            _DeletionWarning(
+              there: _deletionsThere.length,
+              here: _deletionsHere.length,
+              deviceName: widget.deviceName,
+            ),
           if (preview.folders.isNotEmpty) _FolderSection(preview.folders),
           if (conflicts.isNotEmpty)
             _Section(
@@ -163,15 +173,43 @@ class _MergePreviewPageState extends State<MergePreviewPage> {
     );
   }
 
+  /// Files this will delete on the other device, and on this one. Kept apart
+  /// because only one of them is something the user can still see happening.
+  List<FilePreview> get _deletionsThere => [
+        for (final file in widget.preview.files)
+          if (file.kind == PreviewKind.delete && file.side == PreviewSide.there)
+            file,
+      ];
+
+  List<FilePreview> get _deletionsHere => [
+        for (final file in widget.preview.files)
+          if (file.kind == PreviewKind.delete && file.side == PreviewSide.here)
+            file,
+      ];
+
   Widget _fileTile(FilePreview file) {
     final l10n = AppLocalizations.of(context);
+    final colours = Theme.of(context).colorScheme;
     final counts = file.lines.isEmpty
         ? null
         : '+${file.added}  -${file.removed}';
+    // A deletion is the one thing here that takes something away, so it is the
+    // one thing that does not look like all the rest.
+    final removing = file.kind == PreviewKind.delete;
     return ExpansionTile(
-      leading: Icon(_iconFor(file.kind), size: 20),
-      title: Text(file.path, style: const TextStyle(fontSize: 14)),
-      subtitle: Text([_labelFor(file.kind, l10n), ?counts].join('  ')),
+      leading: Icon(_iconFor(file.kind),
+          size: 20, color: removing ? colours.error : null),
+      title: Text(
+        file.path,
+        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: removing ? colours.error : null,
+              fontWeight: removing ? FontWeight.w600 : null,
+            ),
+      ),
+      subtitle: Text(
+        [_labelFor(file.kind, l10n), ?counts].join('  '),
+        style: removing ? TextStyle(color: colours.error) : null,
+      ),
       children: [
         if (file.conflict?.ancestorKnown == false) const _GuessedBaseNote(),
         if (file.lines.isEmpty)
@@ -196,7 +234,7 @@ class _MergePreviewPageState extends State<MergePreviewPage> {
       return ExpansionTile(
         leading: Icon(Icons.warning,
             size: 20, color: Theme.of(context).colorScheme.error),
-        title: Text(file.path, style: const TextStyle(fontSize: 14)),
+        title: Text(file.path, style: Theme.of(context).textTheme.bodyMedium),
         subtitle: Text(file.lines.isEmpty
             ? l10n.cannotBeCompared
             : l10n.cannotBeMerged),
@@ -227,7 +265,7 @@ class _MergePreviewPageState extends State<MergePreviewPage> {
     return ExpansionTile(
       leading: Icon(Icons.warning,
           size: 20, color: Theme.of(context).colorScheme.error),
-      title: Text(file.path, style: const TextStyle(fontSize: 14)),
+      title: Text(file.path, style: Theme.of(context).textTheme.bodyMedium),
       subtitle: Text(_undecided(file.path) == 0
           ? l10n.allSpotsDecided(hunks.length)
           : l10n.spotsToDecide(_undecided(file.path))),
@@ -256,7 +294,7 @@ class _MergePreviewPageState extends State<MergePreviewPage> {
           choice
               ? l10n.spotKeptMine(hunk.ourStart)
               : l10n.spotTookTheirs(hunk.theirStart),
-          style: const TextStyle(fontSize: 13),
+          style: Theme.of(context).textTheme.bodySmall,
         ),
         trailing: TextButton(
           onPressed: () => _reopen(path, index),
@@ -322,6 +360,76 @@ class _MergePreviewPageState extends State<MergePreviewPage> {
 
 /// Says plainly that a merge had no ancestor to work from, because the result
 /// is a good guess rather than a certainty and the user is about to approve it.
+/// What this sync will take away, said before anything else on the screen.
+///
+/// A preview is mostly about what arrives; deletions are the part that cannot
+/// be taken back, and on the other device they happen out of sight. So they get
+/// a banner rather than a line in a list, and the wording says plainly that
+/// nothing keeps a copy.
+class _DeletionWarning extends StatelessWidget {
+  const _DeletionWarning({
+    required this.there,
+    required this.here,
+    required this.deviceName,
+  });
+
+  final int there;
+  final int here;
+  final String deviceName;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colours = theme.colorScheme;
+    final l10n = AppLocalizations.of(context);
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: colours.errorContainer,
+        borderRadius: const BorderRadius.all(Radius.circular(18)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.delete_forever, color: colours.onErrorContainer),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (there > 0)
+                  Text(
+                    l10n.deletionsWarning(there, deviceName),
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      color: colours.onErrorContainer,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                if (here > 0)
+                  Text(
+                    l10n.deletionsHereWarning(here),
+                    style: theme.textTheme.titleSmall?.copyWith(
+                      color: colours.onErrorContainer,
+                      fontWeight: there > 0 ? FontWeight.w500 : FontWeight.w700,
+                    ),
+                  ),
+                const SizedBox(height: 6),
+                Text(
+                  l10n.deletionsWarningBody,
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: colours.onErrorContainer, height: 1.4),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _GuessedBaseNote extends StatelessWidget {
   const _GuessedBaseNote();
 
@@ -618,7 +726,8 @@ class _FolderSection extends StatelessWidget {
               folder.created ? Icons.create_new_folder : Icons.folder_delete,
               size: 20,
             ),
-            title: Text(folder.path, style: const TextStyle(fontSize: 14)),
+            title: Text(folder.path,
+                style: Theme.of(context).textTheme.bodyMedium),
             subtitle: Text(switch ((folder.created, folder.side)) {
               (true, PreviewSide.here) => l10n.folderCreatedHere,
               (true, _) => l10n.folderCreatedThere,
