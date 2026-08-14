@@ -116,7 +116,7 @@ void main() {
     File('${local.path}/note.md').writeAsStringSync(start);
     File('${remote.path}/note.md').writeAsStringSync(start);
     final base = await Manifest.scan(local);
-    await refreshBaseStore(local, Manifest({}), base);
+    await refreshBaseStore(local, base);
 
     File('${local.path}/note.md').writeAsStringSync('# Notes\n\n- milk\n- bread\n');
     File('${remote.path}/note.md').writeAsStringSync('# Shopping\n\n- milk\n');
@@ -135,7 +135,7 @@ void main() {
     File('${local.path}/note.md').writeAsStringSync('title\n');
     File('${remote.path}/note.md').writeAsStringSync('title\n');
     final base = await Manifest.scan(local);
-    await refreshBaseStore(local, Manifest({}), base);
+    await refreshBaseStore(local, base);
 
     File('${local.path}/note.md').writeAsStringSync('mine\n');
     File('${remote.path}/note.md').writeAsStringSync('theirs\n');

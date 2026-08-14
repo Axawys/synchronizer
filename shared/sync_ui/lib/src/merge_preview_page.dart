@@ -14,11 +14,28 @@ class MergePreviewPage extends StatefulWidget {
     required this.folderName,
     required this.deviceName,
     required this.preview,
+    this.readOnly = false,
+    this.title,
   });
 
   final String folderName;
   final String deviceName;
   final SyncPreview preview;
+
+  /// Show the changes and settle nothing.
+  ///
+  /// Levelling several devices decides conflicts on its own screen, where every
+  /// device's copy is laid out at once, and applies them to all of them
+  /// together. What it was missing was this screen: "what will change on that
+  /// device" was a list of file names, which says nothing about whether the
+  /// paragraph you spent the evening on is the one arriving or the one being
+  /// overwritten. Same page, same diffs, no buttons that decide anything.
+  final bool readOnly;
+
+  /// What to call the screen. Defaults to the folder under review; the
+  /// levelling run names the device instead, since that is the question being
+  /// asked there.
+  final String? title;
 
   @override
   State<MergePreviewPage> createState() => _MergePreviewPageState();
@@ -103,7 +120,7 @@ class _MergePreviewPageState extends State<MergePreviewPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(l10n.reviewFolder(widget.folderName)),
+        title: Text(widget.title ?? l10n.reviewFolder(widget.folderName)),
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(24),
           child: Padding(
@@ -165,11 +182,13 @@ class _MergePreviewPageState extends State<MergePreviewPage> {
           const SizedBox(height: 88),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => Navigator.pop(context, _resolve()),
-        icon: const Icon(Icons.check),
-        label: Text(l10n.applyCount(preview.files.length)),
-      ),
+      floatingActionButton: widget.readOnly
+          ? null
+          : FloatingActionButton.extended(
+              onPressed: () => Navigator.pop(context, _resolve()),
+              icon: const Icon(Icons.check),
+              label: Text(l10n.applyCount(preview.files.length)),
+            ),
     );
   }
 
@@ -245,18 +264,19 @@ class _MergePreviewPageState extends State<MergePreviewPage> {
                 insertLabel: l10n.labelMine, deleteLabel: l10n.labelTheirs),
             const SizedBox(height: 8),
           ],
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-            child: SegmentedButton<bool>(
-              segments: [
-                ButtonSegment(value: true, label: Text(l10n.keepMine)),
-                ButtonSegment(value: false, label: Text(l10n.takeTheirs)),
-              ],
-              selected: {_keepLocal[file.path]!},
-              onSelectionChanged: (s) =>
-                  setState(() => _keepLocal[file.path] = s.first),
+          if (!widget.readOnly)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: SegmentedButton<bool>(
+                segments: [
+                  ButtonSegment(value: true, label: Text(l10n.keepMine)),
+                  ButtonSegment(value: false, label: Text(l10n.takeTheirs)),
+                ],
+                selected: {_keepLocal[file.path]!},
+                onSelectionChanged: (s) =>
+                    setState(() => _keepLocal[file.path] = s.first),
+              ),
             ),
-          ),
         ],
       );
     }
@@ -266,9 +286,11 @@ class _MergePreviewPageState extends State<MergePreviewPage> {
       leading: Icon(Icons.warning,
           size: 20, color: Theme.of(context).colorScheme.error),
       title: Text(file.path, style: Theme.of(context).textTheme.bodyMedium),
-      subtitle: Text(_undecided(file.path) == 0
-          ? l10n.allSpotsDecided(hunks.length)
-          : l10n.spotsToDecide(_undecided(file.path))),
+      subtitle: Text(widget.readOnly
+          ? l10n.levelConflictsCount(hunks.length)
+          : _undecided(file.path) == 0
+              ? l10n.allSpotsDecided(hunks.length)
+              : l10n.spotsToDecide(_undecided(file.path))),
       initiallyExpanded: true,
       children: [
         if (!file.conflict!.ancestorKnown) const _GuessedBaseNote(),
@@ -320,22 +342,24 @@ class _MergePreviewPageState extends State<MergePreviewPage> {
             oldStart: hunk.theirStart,
             newStart: hunk.ourStart,
           ),
-          const SizedBox(height: 8),
-          Row(
-            children: [
-              FilledButton.tonalIcon(
-                onPressed: () => _decide(path, index, true),
-                icon: const Icon(Icons.arrow_circle_down, size: 18),
-                label: Text(l10n.takeMine),
-              ),
-              const SizedBox(width: 8),
-              OutlinedButton.icon(
-                onPressed: () => _decide(path, index, false),
-                icon: const Icon(Icons.arrow_circle_up, size: 18),
-                label: Text(l10n.takeTheirs),
-              ),
-            ],
-          ),
+          if (!widget.readOnly) ...[
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                FilledButton.tonalIcon(
+                  onPressed: () => _decide(path, index, true),
+                  icon: const Icon(Icons.arrow_circle_down, size: 18),
+                  label: Text(l10n.takeMine),
+                ),
+                const SizedBox(width: 8),
+                OutlinedButton.icon(
+                  onPressed: () => _decide(path, index, false),
+                  icon: const Icon(Icons.arrow_circle_up, size: 18),
+                  label: Text(l10n.takeTheirs),
+                ),
+              ],
+            ),
+          ],
         ],
       ),
     );

@@ -8,6 +8,7 @@ import '../l10n/gen/app_localizations.dart';
 import 'app_settings.dart';
 import 'direct_connect_page.dart';
 import 'direct_link.dart';
+import 'folder_choice.dart';
 import 'qr_pairing.dart';
 import 'home.dart';
 import 'prefs_trust_store.dart';
@@ -111,7 +112,7 @@ class _HomeShellState extends State<HomeShell> {
       directories: _folders,
     );
     if (widget.autoStart) {
-      _folders.load();
+      _folders.load().then((_) => _checkStorage());
       // Closing the app should take this device off other people's lists right
       // away; coming back to it should look again, since the phone may have
       // changed network while it was away.
@@ -121,6 +122,21 @@ class _HomeShellState extends State<HomeShell> {
       );
       startNetworking();
     }
+  }
+
+  /// Once the stored choice is back: can this app read files, and is there
+  /// anything in the folder it is supposed to be syncing?
+  ///
+  /// Both are checked here rather than left to the first sync, because both
+  /// fail as silence - "nothing to do" over a vault the app cannot see, or over
+  /// a folder that is not the one with the vault in it - and silence is exactly
+  /// what nobody can debug.
+  ///
+  /// After a frame, so there is a Navigator to put the question in.
+  void _checkStorage() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) ensureStorageReady(context, _folders);
+    });
   }
 
   Future<void> startNetworking() async {

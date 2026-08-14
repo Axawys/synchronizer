@@ -1,4 +1,7 @@
+import 'dart:convert';
 import 'dart:io';
+
+import 'package:crypto/crypto.dart';
 
 import 'package:sync_net/sync_net.dart';
 import 'package:test/test.dart';
@@ -53,7 +56,7 @@ void main() {
     File('${local.path}/note.md').writeAsStringSync(content);
     File('${remote.path}/note.md').writeAsStringSync(content);
     final base = await Manifest.scan(local);
-    await refreshBaseStore(local, Manifest({}), base);
+    await refreshBaseStore(local, base);
     return base;
   }
 
@@ -181,28 +184,49 @@ void main() {
   });
 
   group('refreshBaseStore', () {
-    test('keeps a copy so the next sync can merge', () async {
+    String hashOf(String text) => sha256.convert(utf8.encode(text)).toString();
+
+    test('keeps the text so the next sync can merge', () async {
       File('${local.path}/note.md').writeAsStringSync('v1');
       final current = await Manifest.scan(local);
 
-      await refreshBaseStore(local, Manifest({}), current);
+      await refreshBaseStore(local, current);
 
-      expect(await BaseStore(local).read('note.md'), 'v1');
+      expect(await BaseStore(local).read(hashOf('v1')), 'v1');
     });
 
-    test('follows the content forward and forgets deleted files', () async {
+    test('keeps every version any pair might still be merging against',
+        () async {
+      // Two devices, agreed with this one at different moments. Under one slot
+      // per path the second sync overwrote the first pair's ancestor, and that
+      // pair's next merge read as "only they changed anything".
+      File('${local.path}/note.md').writeAsStringSync('v1');
+      await refreshBaseStore(local, await Manifest.scan(local));
+
+      File('${local.path}/note.md').writeAsStringSync('v2');
+      await refreshBaseStore(local, await Manifest.scan(local));
+
+      expect(await BaseStore(local).read(hashOf('v1')), 'v1');
+      expect(await BaseStore(local).read(hashOf('v2')), 'v2');
+    });
+
+    test('pruning drops what no pair and no file refers to', () async {
       File('${local.path}/note.md').writeAsStringSync('v1');
       final first = await Manifest.scan(local);
-      await refreshBaseStore(local, Manifest({}), first);
+      await refreshBaseStore(local, first);
 
       File('${local.path}/note.md').writeAsStringSync('v2');
       final second = await Manifest.scan(local);
-      await refreshBaseStore(local, first, second);
-      expect(await BaseStore(local).read('note.md'), 'v2');
+      await refreshBaseStore(local, second);
 
-      File('${local.path}/note.md').deleteSync();
-      await refreshBaseStore(local, second, await Manifest.scan(local));
-      expect(await BaseStore(local).read('note.md'), isNull);
+      // One device still counts v1 as its ancestor, so it stays.
+      await pruneBaseStore(local, [second, first]);
+      expect(await BaseStore(local).read(hashOf('v1')), 'v1');
+
+      // Once nobody does, it goes.
+      await pruneBaseStore(local, [second]);
+      expect(await BaseStore(local).read(hashOf('v1')), isNull);
+      expect(await BaseStore(local).read(hashOf('v2')), 'v2');
     });
   });
 
@@ -291,7 +315,10 @@ void main() {
       expect(outcome.newBase!.entries.keys, ['note.md']);
       // The regression: recording the manifest while forgetting the text left
       // the merge with no ancestor, so every later conflict had to guess.
-      expect(await BaseStore(local).read('note.md'), '# Notes\n- milk\n');
+      expect(
+          await BaseStore(local)
+              .read(outcome.newBase!.entries['note.md']!.hash),
+          '# Notes\n- milk\n');
     });
 
     test('two syncs later, edits from both devices merge exactly', () async {
@@ -327,7 +354,10 @@ void main() {
 
       expect(outcome.report.ok, isFalse);
       expect(outcome.newBase, isNull, reason: 'nothing to stand behind');
-      expect(await BaseStore(local).read('note.md'), 'v1\n',
+      expect(
+          await BaseStore(local)
+              .read(base.entries['note.md']!.hash),
+          'v1\n',
           reason: 'the retry still needs to tell the two edits apart');
     });
 

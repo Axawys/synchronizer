@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:math' show pi;
 
 import 'package:flutter/foundation.dart' show ValueListenable;
 
@@ -17,6 +16,7 @@ import 'layout.dart';
 import 'multi_sync_page.dart';
 import 'pairing_dialogs.dart';
 import 'rename_dialog.dart';
+import 'rolling_square.dart';
 import 'qr_pairing.dart';
 import 'storage.dart';
 import 'sync_folder_page.dart';
@@ -223,6 +223,8 @@ class _DevicesPageState extends State<DevicesPage> {
   List<TrustedPeer> _trusted = const [];
   bool _busy = false; // a pairing dialog is on screen
   bool _networkFailed = false;
+  /// Guards against two refreshes at once. Nothing on screen shows it: the
+  /// gesture and the button bring their own spinners.
   bool _refreshing = false;
 
   /// What this device's own shared folders weigh, once they have been walked.
@@ -430,16 +432,16 @@ class _DevicesPageState extends State<DevicesPage> {
     });
   }
 
-  /// The refresh button and the pull gesture. Both re-read the network and the
-  /// trust store, and both hold the spinner for a moment: a burst of queries
-  /// takes about a second to be answered, and a control that flashes and
-  /// settles before any answer arrives reads as broken.
+  /// The pull gesture and the "search again" button. Both re-read the network
+  /// and the trust store, and both hold their spinner for a moment: a burst of
+  /// queries takes about a second to be answered, and a control that flashes
+  /// and settles before any answer arrives reads as broken.
   Future<void> _refreshEverything() async {
     if (_refreshing) return;
+    _refreshing = true;
     _startSearchCountdown();
-    setState(() => _refreshing = true);
     // Refreshing means the numbers too: a folder that has grown since the
-    // screen opened is exactly what someone pressing this wants to see.
+    // screen opened is exactly what someone pulling on this wants to see.
     _peerFolders.clear();
     await Future.wait([
       _discovery.refresh(),
@@ -448,7 +450,7 @@ class _DevicesPageState extends State<DevicesPage> {
       _measureSelf(),
       Future<void>.delayed(const Duration(milliseconds: 900)),
     ]);
-    if (mounted) setState(() => _refreshing = false);
+    _refreshing = false;
   }
 
   @override
@@ -493,7 +495,7 @@ class _DevicesPageState extends State<DevicesPage> {
     }
   }
 
-  // Tapping a device: open the sync screen if already paired, otherwise pair.
+  // Tapping a device: sync with it if already paired, otherwise pair.
   Future<void> _openDevice(_Listed entry) async {
     if (entry.device.address == null) return;
 
@@ -509,28 +511,51 @@ class _DevicesPageState extends State<DevicesPage> {
     // same folder on all of them, and what matters is where each stands. So a
     // tap opens all of them, counts and all.
     if (_pairedOnline.length > 1) {
-      await _openMultiSync();
+      _openMultiSync();
       return;
     }
+
+    // Here, not on a screen of its own. A sync is not a place: it used to be a
+    // room with the device's name on it, which played the animation, opened the
+    // answer on top of itself, and was still standing there - empty - when the
+    // user came back out. Now the waiting happens on the list, the answer is
+    // the only thing that opens, and backing out of it lands here.
+    setState(() => _syncingWith = _Pair(entry.device, trusted));
+  }
+
+  /// The device being synced with right now, and what is known about it, or
+  /// null when the list is just a list.
+  _Pair? _syncingWith;
+
+  /// The run is over: back to the list, with the numbers on it worth doubting.
+  Future<void> _endSync() async {
+    if (!mounted) return;
+    final device = _syncingWith?.device;
+    setState(() => _syncingWith = null);
+    if (device == null) return;
+    // Both sides have moved: what the cards say about them is last week's.
+    _forgetFolders(device.id);
+    await _measureSelf();
+    await _refreshTrusted();
+  }
+
+  /// The run needs a question asked - which folder, or where to put one - and
+  /// a question needs somewhere to be asked. Only then does a screen open.
+  Future<void> _openSyncScreen() async {
+    final pair = _syncingWith;
+    if (pair == null || !mounted) return;
+    setState(() => _syncingWith = null);
 
     await Navigator.of(context).push(MaterialPageRoute<void>(
       builder: (_) => SyncPage(
         self: widget.self,
-        trusted: trusted,
-        device: entry.device,
-        // The folder is already chosen on this device; the screen should not
-        // ask for it again just because this pair has not met before.
+        trusted: pair.trusted,
+        device: pair.device,
         folders: widget.folders,
-        // Tapping a device is asking for a sync, not for a list of one folder
-        // to tap a second time.
-        autoSync: true,
-        // So the screen notices the device leaving the network or coming back
-        // at a different address, instead of holding a dead connection.
         presence: _discovery,
       ),
     ));
-    // Both sides have moved: the numbers on the cards are last week's.
-    _forgetFolders(entry.device.id);
+    _forgetFolders(pair.device.id);
     await _measureSelf();
     await _refreshTrusted();
   }
@@ -661,15 +686,23 @@ class _DevicesPageState extends State<DevicesPage> {
     ));
   }
 
-  Future<void> _openMultiSync() async {
-    await Navigator.of(context).push(MaterialPageRoute<void>(
-      builder: (_) => MultiSyncPage(
-        self: widget.self,
-        devices: _pairedOnline,
-        trust: widget.trust,
-        folders: widget.folders,
-      ),
-    ));
+  /// Whether the devices present are being brought into line, here on the
+  /// list. Levelling several devices is the same request as syncing with one -
+  /// "bring these into line" - and it opens no more rooms than that one does.
+  bool _levelling = false;
+
+  void _openMultiSync() => setState(() => _levelling = true);
+
+  /// The levelling is over, by its own hand or by the back arrow.
+  Future<void> _endLevelling() async {
+    if (!mounted) return;
+    final devices = _pairedOnline;
+    setState(() => _levelling = false);
+    for (final device in devices) {
+      _forgetFolders(device.id);
+    }
+    await _measureSelf();
+    await _refreshTrusted();
   }
 
   void _openHistory() {
@@ -720,69 +753,138 @@ class _DevicesPageState extends State<DevicesPage> {
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
-    return Scaffold(
+    final screen = Scaffold(
       appBar: AppBar(
-        title: Text(l10n.devicesTitle),
-        actions: [
-          IconButton(
-            icon: _refreshing
-                ? const SizedBox(
-                    width: 20,
-                    height: 20,
-                    child: CircularProgressIndicator(strokeWidth: 2.5),
-                  )
-                : const Icon(Icons.refresh),
-            tooltip: l10n.searchAgain,
-            onPressed: _refreshing ? null : _refreshEverything,
-          ),
-          // Only worth offering when there is more than one device to bring
-          // into line; with one it is the ordinary sync screen.
-          if (_pairedOnline.length > 1)
-            IconButton(
-              icon: const Icon(Icons.hub),
-              tooltip: l10n.bringInLine,
-              onPressed: _openMultiSync,
-            ),
-          IconButton(
-            icon: const Icon(Icons.history),
-            tooltip: l10n.syncHistoryTooltip,
-            onPressed: _openHistory,
-          ),
-        ],
+        // Levelling takes the screen over, so it takes the bar with it: what
+        // is on it is no longer the list, and the way back has to be somewhere
+        // a mouse can reach as well as a thumb.
+        leading: _levelling
+            ? BackButton(onPressed: _endLevelling)
+            : null,
+        title: Text(_levelling ? l10n.allPairedDevices : l10n.devicesTitle),
+        // Nothing in the corner belongs to a run that is under way.
+        actions: _levelling
+            ? const []
+            : [
+                // No refresh here. The screen already offers it where it is
+                // worth offering: the pull gesture, and a button that appears
+                // in the middle of the empty screen once the search has run
+                // out of patience. A permanent one in the corner is the same
+                // action twice, and the one in the corner is the one that says
+                // the list needs managing.
+                //
+                // Only worth offering when there is more than one device to
+                // bring into line; with one it is the ordinary sync.
+                if (_pairedOnline.length > 1)
+                  IconButton(
+                    icon: const Icon(Icons.hub),
+                    tooltip: l10n.bringInLine,
+                    onPressed: _openMultiSync,
+                  ),
+                IconButton(
+                  icon: const Icon(Icons.history),
+                  tooltip: l10n.syncHistoryTooltip,
+                  onPressed: _openHistory,
+                ),
+              ],
       ),
       // Crossing from "looking" to a found device is the moment the app is
       // waited on; a fade makes it land rather than blink.
-      body: Column(
-        children: [
-          // Always on screen, not only once something has been found: on a
-          // first run the list is empty for a while, and this is where the
-          // folder to sync is chosen.
-          Padding(
-            padding: const EdgeInsets.fromLTRB(
-                Layout.gutter, Layout.gap, Layout.gutter, 0),
-            child: ContentPane(
-              child: SelfCard(
-                self: widget.self,
-                folders: widget.folders,
-                bytes: _selfBytes,
-                onChooseFolder: _chooseSyncFolder,
-                onOpenFolders: _openFolders,
-                onRename: () => renameDeviceDialog(
-                  context,
-                  current: widget.self.name,
-                  onRename: widget.onRename,
-                ),
+      body: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 250),
+        child: _levelling
+            ? _levellingBody()
+            : _syncingWith == null
+                ? _deviceList()
+                : _syncing(_syncingWith!),
+      ),
+    );
+
+    // A run on this screen is what the back gesture is for while it lasts: it
+    // is the thing the user is in, even though it opened no room.
+    return PopScope(
+      canPop: _syncingWith == null && !_levelling,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        if (_levelling) {
+          _endLevelling();
+        } else {
+          _endSync();
+        }
+      },
+      child: screen,
+    );
+  }
+
+  /// Every paired device present, brought into line, in the place the list was.
+  Widget _levellingBody() {
+    return MultiSyncPage(
+      key: const ValueKey('levelling'),
+      self: widget.self,
+      devices: _pairedOnline,
+      trust: widget.trust,
+      folders: widget.folders,
+      embedded: true,
+      onDone: _endLevelling,
+    );
+  }
+
+  /// The list, and this device at the head of it.
+  Widget _deviceList() {
+    return Column(
+      key: const ValueKey('devices'),
+      children: [
+        // Always on screen, not only once something has been found: on a
+        // first run the list is empty for a while, and this is where the
+        // folder to sync is chosen.
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+              Layout.gutter, Layout.gap, Layout.gutter, 0),
+          child: ContentPane(
+            child: SelfCard(
+              self: widget.self,
+              folders: widget.folders,
+              bytes: _selfBytes,
+              onChooseFolder: _chooseSyncFolder,
+              onOpenFolders: _openFolders,
+              onRename: () => renameDeviceDialog(
+                context,
+                current: widget.self.name,
+                onRename: widget.onRename,
               ),
             ),
           ),
-          Expanded(
-            child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 250),
-              child: _body(),
-            ),
+        ),
+        Expanded(
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 250),
+            child: _body(),
           ),
-        ],
-      ),
+        ),
+      ],
+    );
+  }
+
+  /// The sync itself, in the place the list was. No card of this device above
+  /// it: it is one of the two in the middle of the screen.
+  Widget _syncing(_Pair pair) {
+    return SyncPage(
+      key: ValueKey('sync-${pair.device.id}'),
+      self: widget.self,
+      trusted: pair.trusted,
+      device: pair.device,
+      // The folder is already chosen on this device; nothing should ask for it
+      // again just because this pair has not met before.
+      folders: widget.folders,
+      // Tapping a device is asking for a sync, not for a list of one folder to
+      // tap a second time.
+      autoSync: true,
+      // So it notices the device leaving the network or coming back at a
+      // different address, instead of holding a dead connection.
+      presence: _discovery,
+      embedded: true,
+      onDone: _endSync,
+      onNeedsChoice: _openSyncScreen,
     );
   }
 
@@ -917,7 +1019,7 @@ class SelfCard extends StatelessWidget {
               horizontal: Layout.gap + 2, vertical: Layout.gap),
           child: Row(
             children: [
-              IconBadge(icon: _iconFor(self.platform), accented: true),
+              IconBadge(icon: deviceIcon(self.platform), accented: true),
               const SizedBox(width: Layout.gap + 2),
               Expanded(
                 child: Column(
@@ -1054,6 +1156,15 @@ class _Listed {
   final bool paired;
 }
 
+/// A device to sync with and the secret this device shares with it: the two
+/// things a run needs, held together while it lasts.
+class _Pair {
+  const _Pair(this.device, this.trusted);
+
+  final DeviceInfo device;
+  final TrustedPeer trusted;
+}
+
 /// One device on the network, as a card: what it calls itself, what it is
 /// holding, and whether this device has been paired with it.
 ///
@@ -1079,6 +1190,10 @@ class DeviceCard extends StatelessWidget {
   /// how a person recognises one, and on a paired device the folder and its
   /// weight are what the tap is going to act on. Null while the answer has not
   /// arrived - or did not - and then the address stands in.
+  ///
+  /// The folder's name and weight, not where it sits: another device's paths
+  /// are its own business, and nobody reading this card is going to go looking
+  /// in that directory.
   final List<SharedDir>? folders;
 
   final VoidCallback? onTap;
@@ -1102,7 +1217,7 @@ class DeviceCard extends StatelessWidget {
           horizontal: Layout.gap + 2, vertical: Layout.gap),
       child: Row(
         children: [
-          IconBadge(icon: _iconFor(device.platform), accented: paired),
+          IconBadge(icon: deviceIcon(device.platform), accented: paired),
           const SizedBox(width: Layout.gap + 2),
           Expanded(
             child: Column(
@@ -1173,7 +1288,7 @@ class DeviceCard extends StatelessWidget {
         return FolderLine(text: l10n.folderMissingThere, warn: true);
       }
       return FolderLine(
-        text: dir.path == null ? dir.name : prettyPath(dir.path!),
+        text: dir.name,
         size: dir.bytes == null ? null : formatSize(l10n, dir.bytes!),
       );
     }
@@ -1231,12 +1346,6 @@ class FolderLine extends StatelessWidget {
   }
 }
 
-IconData _iconFor(DevicePlatform platform) => switch (platform) {
-      DevicePlatform.android => Icons.smartphone,
-      DevicePlatform.linux => Icons.computer,
-      DevicePlatform.unknown => Icons.devices_other,
-    };
-
 /// The screen while nothing has been found: a square tumbling back and forth,
 /// and what to do about it.
 ///
@@ -1283,7 +1392,7 @@ class SearchingPanel extends StatelessWidget {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    _RollingSquare(rolling: !timedOut),
+                    RollingSquare(rolling: !timedOut),
                     const SizedBox(height: 24),
                     Text(
                       timedOut ? l10n.noDevicesFound : l10n.lookingForDevices,
@@ -1332,115 +1441,6 @@ class SearchingPanel extends StatelessWidget {
                 ),
               ),
             ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// A square that rolls a few steps to the right, then back to the left.
-///
-/// A spinner says "something is happening"; this says the same thing without
-/// the app's one waiting screen looking like every other app's. It tumbles the
-/// way a die would - each step pivots on the corner it is about to land on -
-/// because a square that slides rather than rolls looks like a bug.
-class _RollingSquare extends StatefulWidget {
-  const _RollingSquare({required this.rolling});
-
-  /// False parks it flat: the search is over, and motion would say otherwise.
-  final bool rolling;
-
-  @override
-  State<_RollingSquare> createState() => _RollingSquareState();
-}
-
-class _RollingSquareState extends State<_RollingSquare>
-    with SingleTickerProviderStateMixin {
-  static const double _side = 16;
-  static const int _steps = 3;
-
-  late final AnimationController _controller = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 1150),
-  );
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    _sync();
-  }
-
-  @override
-  void didUpdateWidget(_RollingSquare old) {
-    super.didUpdateWidget(old);
-    if (old.rolling != widget.rolling) _sync();
-  }
-
-  void _sync() {
-    // Someone who has asked the system for less motion gets a still square
-    // rather than a livelier spinner.
-    final wanted =
-        widget.rolling && !MediaQuery.disableAnimationsOf(context);
-    if (wanted == _controller.isAnimating) return;
-    if (wanted) {
-      // Reversing is the roll back: played backwards, the same tumble unwinds
-      // step by step to where it started.
-      _controller.repeat(reverse: true);
-    } else {
-      _controller.stop();
-      _controller.value = 0;
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = Theme.of(context).colorScheme;
-
-    return SizedBox(
-      // Room for the whole run, plus the height a corner reaches mid-tumble.
-      width: _side * (_steps + 1),
-      height: _side * 1.5,
-      child: AnimatedBuilder(
-        animation: _controller,
-        builder: (context, child) {
-          // Parked: the middle of the run, sitting flat. The left end of the
-          // track is where a roll starts, not where a square belongs when it
-          // is not rolling at all.
-          if (!_controller.isAnimating) {
-            return Align(alignment: Alignment.bottomCenter, child: child);
-          }
-
-          final progress = _controller.value * _steps;
-          final step = progress.floor().clamp(0, _steps - 1);
-          final turn = progress - step;
-
-          return Align(
-            alignment: Alignment.bottomLeft,
-            child: Transform.translate(
-              offset: Offset(step * _side, 0),
-              child: Transform.rotate(
-                // Pivot on the bottom-right corner: a quarter turn about it
-                // lands the square exactly one side further along.
-                alignment: Alignment.bottomRight,
-                angle: turn * (pi / 2),
-                child: child,
-              ),
-            ),
-          );
-        },
-        child: Container(
-          width: _side,
-          height: _side,
-          decoration: BoxDecoration(
-            color: colors.primary,
-            borderRadius: const BorderRadius.all(Radius.circular(3)),
           ),
         ),
       ),

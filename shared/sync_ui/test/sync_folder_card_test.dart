@@ -159,8 +159,16 @@ void main() {
       expect(formatSize(l10n, 900), '900 B');
       expect(formatSize(l10n, 8_400), '8.4 kB');
       expect(formatSize(l10n, 120_000), '120 kB');
-      expect(formatSize(l10n, 3_200_000), '3.2 MB');
       expect(formatSize(l10n, 1_288_490_188), '1.3 GB');
+    });
+
+    test('a vault stays in kilobytes until it is a hundred megabytes', () {
+      // Where notes live from one end of their life to the other, and two
+      // devices are only comparable at a glance if both are on one scale.
+      expect(formatSize(l10n, 3_200_000), '3200 kB');
+      expect(formatSize(l10n, 24_500_000), '24500 kB');
+      expect(formatSize(l10n, 99_000_000), '99000 kB');
+      expect(formatSize(l10n, 120_000_000), '120 MB');
     });
 
     test('an empty folder is empty, not "0 B"', () {
@@ -179,10 +187,10 @@ void main() {
     });
 
     test('somebody else\'s home is still a home', () {
-      // The path on the card comes from the other device now. Read on a phone,
-      // a desktop's home matches nothing here, and the two segments that say
-      // "a Linux machine, somebody's account" would push the folder off the
-      // row.
+      // A path this device did not write - one carried in a log, or read on a
+      // phone where HOME is something else entirely - still reads better
+      // without the two segments that say "a Linux machine, somebody's
+      // account".
       expect(prettyPath('/home/axawys/Documents/Obsidian', home: '/data/user'),
           '~/Documents/Obsidian');
       expect(prettyPath('/home/axawys', home: '/data/user'), '~');

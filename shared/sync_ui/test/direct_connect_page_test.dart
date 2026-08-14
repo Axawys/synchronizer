@@ -3,8 +3,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sync_net/sync_net.dart';
 import 'package:sync_ui/sync_ui.dart';
 
-/// The screen for when discovery cannot help. It has to be understandable
-/// without any of it working: the person reading it is already stuck.
+/// The screen for when discovery cannot help. It is two buttons and a code:
+/// the person reading it is already stuck, and the parts a code is made of -
+/// networks, addresses, passwords - are not theirs to assemble.
 void main() {
   const self = DeviceInfo(
     id: 'self',
@@ -15,7 +16,6 @@ void main() {
 
   Future<void> pump(
     WidgetTester tester, {
-    DirectRole? role,
     DirectLinkControls? links,
     QrScanner? scanner,
     PeerServer? server,
@@ -31,7 +31,6 @@ void main() {
         links: links,
         scanner: scanner,
         server: server,
-        initialRole: role ?? DirectRole.receive,
         // Reading real interfaces would make this test depend on the machine
         // it runs on.
         autoLoad: autoLoad,
@@ -41,115 +40,28 @@ void main() {
     await tester.pump();
   }
 
-  /// The address field and the two roles now live behind the "by hand" tile:
-  /// the camera is the way in, and typing is the fallback under it.
-  Future<void> expandManual(WidgetTester tester) async {
-    await tester.tap(find.text('By hand, without a camera'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 400));
-  }
+  testWidgets('there is nothing to assemble by hand', (tester) async {
+    await pump(tester, links: _FakeLinks(), server: null, autoLoad: true);
 
-  testWidgets('the waiting end explains itself and says it is waiting',
-      (tester) async {
-    await pump(tester);
-    await expandManual(tester);
-
-    expect(find.text("This device's addresses"), findsOneWidget);
-    expect(find.text('Waiting for the other device to connect…'), findsOneWidget);
+    // Every one of these was a control on this screen once, and every one of
+    // them asks the user to understand how the connection is made.
+    expect(find.text('By hand, without a camera'), findsNothing);
+    expect(find.byType(TextField), findsNothing);
+    expect(find.text('Become a hotspot'), findsNothing);
+    expect(find.text('Tethering settings'), findsNothing);
+    expect(find.text('Join a Wi-Fi network'), findsNothing);
+    expect(find.text("This device's addresses"), findsNothing);
   });
 
-  testWidgets('either end can be chosen', (tester) async {
-    await pump(tester);
-    await expandManual(tester);
-    expect(find.text('Address'), findsNothing);
-
-    await tester.tap(find.text('Send'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('Address'), findsOneWidget);
-    expect(find.text('Connect'), findsOneWidget);
-  });
-
-  testWidgets('what to do with no shared network is on the screen',
-      (tester) async {
+  testWidgets('the one thing no button can fix is still said', (tester) async {
     await pump(tester);
 
-    // The whole reason someone opens this screen, so it is not hidden behind
-    // the mode that happens to be selected: what to do to make a link, and the
-    // one thing no button here can fix.
-    expect(find.textContaining('turn on USB tethering'), findsOneWidget);
+    // Mobile data alone cannot carry this, however many bars it shows. It is
+    // the assumption people arrive with, and nothing on screen would tell them
+    // otherwise.
     expect(
         find.textContaining('Mobile data on its own is not enough'),
         findsOneWidget);
-  });
-
-  testWidgets('nonsense in the address field is refused before dialling',
-      (tester) async {
-    await pump(tester, role: DirectRole.send);
-    await expandManual(tester);
-
-    await tester.enterText(find.byType(TextField), '10.0.0.4:not-a-port');
-    await tester.tap(find.text('Connect'));
-    await tester.pump();
-
-    expect(
-        find.textContaining('Expected something like 192.168.43.1:47800'),
-        findsOneWidget);
-  });
-
-  testWidgets('an empty address is refused too', (tester) async {
-    await pump(tester, role: DirectRole.send);
-    await expandManual(tester);
-
-    await tester.tap(find.text('Connect'));
-    await tester.pump();
-
-    expect(find.textContaining('That is not an address'), findsOneWidget);
-  });
-
-  testWidgets('a platform that can host one offers to become a hotspot',
-      (tester) async {
-    final links = _FakeLinks();
-    await pump(tester, links: links, autoLoad: true);
-
-    expect(find.text('Become a hotspot'), findsOneWidget);
-
-    await tester.tap(find.text('Become a hotspot'));
-    await tester.pump();
-    await tester.pump();
-
-    // The name and password are the system's to choose; the screen's job is to
-    // put them where they can be read out to the other device.
-    expect(find.textContaining('Join this network'), findsOneWidget);
-    expect(find.text('SyncSpot-42'), findsOneWidget);
-    expect(find.text('Password: hunter2hunter'), findsOneWidget);
-    expect(find.text('Stop the hotspot'), findsOneWidget);
-  });
-
-  testWidgets('a hotspot the system refuses is said so, not hidden',
-      (tester) async {
-    final links = _FakeLinks(hotspot: null);
-    await pump(tester, links: links, autoLoad: true);
-
-    await tester.tap(find.text('Become a hotspot'));
-    await tester.pump();
-    await tester.pump();
-
-    expect(find.textContaining('Could not start a hotspot'), findsOneWidget);
-  });
-
-  testWidgets('the system screens for tethering and Wi-Fi can be opened',
-      (tester) async {
-    final links = _FakeLinks();
-    await pump(tester, links: links, autoLoad: true);
-
-    await tester.tap(find.text('Tethering settings'));
-    await tester.pump();
-    expect(links.openedTethering, 1);
-
-    await tester.tap(find.text('Join a Wi-Fi network'));
-    await tester.pump();
-    expect(links.openedWifi, 1);
   });
 
   testWidgets('showing a code puts one on screen with a token the server takes',
@@ -158,7 +70,8 @@ void main() {
     await server.start();
     addTearDown(server.stop);
 
-    await pump(tester, links: _FakeLinks(), server: server, autoLoad: true);
+    final links = _FakeLinks();
+    await pump(tester, links: links, server: server, autoLoad: true);
     expect(find.text('Show a code'), findsOneWidget);
 
     // Reading this device's interfaces is real I/O, which only turns under
@@ -169,27 +82,67 @@ void main() {
     });
     await tester.pump();
 
-    // Wherever it lands on a test-sized window, bring it into view the way a
-    // user scrolling would.
     await tester.ensureVisible(find.byType(PairingQrCode, skipOffstage: false));
     await tester.pump();
 
     expect(find.byType(PairingQrCode), findsOneWidget);
     expect(server.qrToken, isNotNull, reason: 'the code is worth nothing '
         'unless the server will honour it');
-    // The hotspot it raised is named on screen - twice over, in fact: once by
-    // the panel that started it and once under the code, for the device whose
-    // camera cannot read it.
-    expect(find.text('SyncSpot-42'), findsWidgets);
+    // The hotspot it raised is between the two devices: the code carries the
+    // network and the key, and neither is anybody's to read or type.
+    expect(links.started, 1);
+    expect(find.text('SyncSpot-42'), findsNothing);
+    expect(find.textContaining('hunter2hunter'), findsNothing);
+    expect(find.textContaining(':47800'), findsNothing);
+  });
+
+  testWidgets('hiding the code takes the hotspot down with it', (tester) async {
+    final server = PeerServer(self, MemoryTrustStore(), port: 0);
+    await server.start();
+    addTearDown(server.stop);
+
+    final links = _FakeLinks();
+    await pump(tester, links: links, server: server, autoLoad: true);
+    await tester.runAsync(() async {
+      await tester.tap(find.text('Show a code'));
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    });
+    await tester.pump();
 
     await tester.ensureVisible(find.text('Hide the code', skipOffstage: false));
     await tester.pump();
-    await tester.tap(find.text('Hide the code'));
+    await tester.runAsync(() async {
+      await tester.tap(find.text('Hide the code'));
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    });
     await tester.pump();
 
     expect(find.byType(PairingQrCode), findsNothing);
     expect(server.qrToken, isNull,
         reason: 'a token nobody is watching for is a way in');
+    // Nobody is coming to scan a code that is off screen, and the network was
+    // only ever there to carry it.
+    expect(links.stopped, isTrue);
+  });
+
+  testWidgets('a hotspot the system refuses is said, and the code goes up '
+      'anyway', (tester) async {
+    final server = PeerServer(self, MemoryTrustStore(), port: 0);
+    await server.start();
+    addTearDown(server.stop);
+
+    await pump(tester,
+        links: _FakeLinks(hotspot: null), server: server, autoLoad: true);
+    await tester.runAsync(() async {
+      await tester.tap(find.text('Show a code'));
+      await Future<void>.delayed(const Duration(milliseconds: 200));
+    });
+    await tester.pump();
+
+    expect(find.textContaining('Could not start a hotspot'), findsOneWidget);
+    // Whatever network this device is already on may well be the one the other
+    // device is on too.
+    expect(find.byType(PairingQrCode, skipOffstage: false), findsOneWidget);
   });
 
   testWidgets('a code that is not ours is refused rather than dialled',
@@ -233,7 +186,33 @@ void main() {
     expect(find.textContaining('could not be reached'), findsOneWidget);
   });
 
-  testWidgets('without a camera only showing a code is offered', (tester) async {
+  testWidgets('a scan that is still going can be called off', (tester) async {
+    const payload = QrPayload(
+      name: 'Pixel 7',
+      addresses: ['203.0.113.1'],
+      port: 47800,
+      token: 'deadbeef',
+    );
+    await pump(tester, scanner: _FakeScanner(payload.encode()), autoLoad: true);
+
+    await tester.tap(find.text('Scan a code'));
+    await tester.pump();
+    await tester.pump();
+
+    // Nothing answers at that address, and the attempt would otherwise sit out
+    // its timeout with the buttons disabled.
+    expect(find.text('Connecting…'), findsOneWidget);
+    await tester.tap(find.text('Cancel'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.text('Connecting…'), findsNothing);
+    expect(find.text('Scan a code'), findsOneWidget,
+        reason: 'back to where it was');
+  });
+
+  testWidgets('without a camera only showing a code is offered',
+      (tester) async {
     final server = PeerServer(self, MemoryTrustStore(), port: 0);
     await server.start();
     addTearDown(server.stop);
@@ -242,37 +221,6 @@ void main() {
 
     expect(find.text('Show a code'), findsOneWidget);
     expect(find.text('Scan a code'), findsNothing);
-  });
-
-  testWidgets('a connection that is still being made can be called off',
-      (tester) async {
-    await pump(tester, role: DirectRole.send);
-    await expandManual(tester);
-
-    await tester.enterText(find.byType(TextField), '203.0.113.1:47800');
-    await tester.tap(find.text('Connect'));
-    await tester.pump();
-
-    // Nothing answers at that address, and the attempt would otherwise sit out
-    // its timeout with the screen locked.
-    expect(find.text('Connecting…'), findsOneWidget);
-    expect(find.text('Cancel'), findsOneWidget);
-
-    await tester.tap(find.text('Cancel'));
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 100));
-
-    expect(find.text('Connect'), findsOneWidget, reason: 'back to where it was');
-  });
-
-  testWidgets('with no link there is nothing to sweep', (tester) async {
-    // Finding the device on the link is only offered where there is a link
-    // that is two devices; sweeping an office network is not on the table.
-    await pump(tester, role: DirectRole.send);
-    await expandManual(tester);
-
-    expect(find.text('Find the device on this link'), findsNothing);
-    expect(find.text('Address'), findsOneWidget);
   });
 }
 
@@ -287,8 +235,7 @@ class _FakeLinks implements DirectLinkControls {
   });
 
   final HotspotCredentials? hotspot;
-  int openedTethering = 0;
-  int openedWifi = 0;
+  int started = 0;
   bool stopped = false;
   String? joined;
   String? boundTo;
@@ -298,22 +245,19 @@ class _FakeLinks implements DirectLinkControls {
   Future<bool> canHostHotspot() async => true;
 
   @override
-  Future<HotspotCredentials?> startHotspot() async => hotspot;
+  Future<HotspotCredentials?> startHotspot() async {
+    started++;
+    return hotspot;
+  }
 
   @override
   Future<void> stopHotspot() async => stopped = true;
 
   @override
-  Future<bool> openTetheringSettings() async {
-    openedTethering++;
-    return true;
-  }
+  Future<bool> openTetheringSettings() async => true;
 
   @override
-  Future<bool> openWifiSettings() async {
-    openedWifi++;
-    return true;
-  }
+  Future<bool> openWifiSettings() async => true;
 
   @override
   Future<bool> joinWifi(String ssid, String passphrase) async {

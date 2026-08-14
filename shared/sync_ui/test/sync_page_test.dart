@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -118,6 +119,126 @@ void main() {
     // asked for again, no chooser would have answered here and the screen
     // would still be showing the folder list.
     expect(await SyncTargets.localPath('peer', 'Obsidian'), here.path);
+
+    await shut(tester);
+  });
+
+  testWidgets('while it is still connecting the two devices roll at each other',
+      (tester) async {
+    // Nothing is listening at that address, so the screen stays where the
+    // complaint was about: waiting, with a folder row and nothing else.
+    const dead = DeviceInfo(
+      id: 'peer',
+      name: 'Tablet',
+      platform: DevicePlatform.android,
+      port: 47800,
+      address: '203.0.113.1',
+    );
+    server = PeerServer(peerInfo, MemoryTrustStore(), port: 0);
+    await server.start();
+
+    await tester.pumpWidget(MaterialApp(
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
+      home: SyncPage(self: self, trusted: tablet, device: dead),
+    ));
+    await tester.pump();
+    // Long enough for the cards to have folded down and started rolling.
+    await tester.pump(const Duration(milliseconds: 1200));
+
+    expect(find.byType(SyncingDevices), findsOneWidget);
+    expect(find.byType(RollingSquare), findsNWidgets(2));
+    expect(find.text('This one'), findsOneWidget);
+    expect(find.text('Tablet'), findsWidgets);
+    // And it is still the wait that can be called off.
+    expect(find.text('Cancel'), findsOneWidget);
+
+    await shut(tester);
+  });
+
+  testWidgets('nothing to sync takes the screen back where it came from',
+      (tester) async {
+    // Both sides hold the same nothing, so the merge is empty.
+    final device = await startPeer({'Obsidian': there.path});
+    final folders = SharedFolders();
+    await folders.chooseAs('Obsidian', here.path);
+
+    final nav = GlobalKey<NavigatorState>();
+    await tester.runAsync(() async {
+      await tester.pumpWidget(MaterialApp(
+        navigatorKey: nav,
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: const Scaffold(body: Center(child: Text('the device list'))),
+      ));
+      unawaited(nav.currentState!.push(MaterialPageRoute<void>(
+        builder: (_) => SyncPage(
+          self: self,
+          trusted: tablet,
+          device: device,
+          folders: folders,
+          autoSync: true,
+        ),
+      )));
+      for (var i = 0; i < 40; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 25));
+        await tester.pump();
+      }
+    });
+    await tester.pumpAndSettle();
+
+    // No folder list opened on the way: there was nothing to decide, and a
+    // screen of folders would be an answer to a question nobody asked.
+    expect(find.byType(SyncFolderCard), findsNothing);
+    expect(find.byType(SyncPage), findsNothing);
+    expect(find.text('the device list'), findsOneWidget);
+    // What was found is said where the user ended up.
+    expect(find.textContaining('already in sync'), findsOneWidget);
+
+    await shut(tester);
+  });
+
+  testWidgets('embedded, a choice to make is what opens a screen',
+      (tester) async {
+    // An older build at the other end, sharing two folders. Which one is a
+    // question, and a question needs somewhere to be asked.
+    final photos = Directory('${there.path}/photos')..createSync();
+    final notes = Directory('${there.path}/notes')..createSync();
+    final device =
+        await startPeer({'notes': notes.path, 'photos': photos.path});
+
+    final folders = SharedFolders();
+    await folders.chooseAs('notes', here.path);
+
+    var asked = 0;
+    await tester.runAsync(() async {
+      await tester.pumpWidget(MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(
+          body: SyncPage(
+            self: self,
+            trusted: tablet,
+            device: device,
+            folders: folders,
+            autoSync: true,
+            embedded: true,
+            onDone: () {},
+            onNeedsChoice: () => asked++,
+          ),
+        ),
+      ));
+      for (var i = 0; i < 40; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 25));
+        await tester.pump();
+      }
+    });
+    await tester.pump();
+
+    expect(asked, 1);
+    // And it does not lay the choice out where it is: the host opens a screen
+    // for that, or nothing happens at all.
+    expect(find.byType(SyncFolderCard), findsNothing);
 
     await shut(tester);
   });

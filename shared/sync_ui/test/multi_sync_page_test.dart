@@ -109,44 +109,60 @@ void main() {
     expect(find.text('Bring into line'), findsNothing);
   });
 
-  testWidgets('the changes waiting for one device can be read file by file',
-      (tester) async {
+  testWidgets('what is waiting for one device is read line by line, not as a '
+      'list of names', (tester) async {
+    // The list of file names was the whole of this screen once, and it cannot
+    // answer what people open it for: whether the paragraph they wrote last
+    // night is the one arriving or the one about to be overwritten.
     FileEntry entry(String path) =>
         FileEntry(path: path, size: 1, modified: DateTime.utc(2026), hash: 'h');
+    MergeItem item(String path, MergeKind kind) => MergeItem(
+          path: path,
+          kind: kind,
+          local: entry(path),
+          remote: entry(path),
+        );
 
-    final merge = MergeResult([
-      MergeItem(
-          path: 'arriving.md',
-          kind: MergeKind.pullToLocal,
-          remote: entry('arriving.md')),
-      MergeItem(
-          path: 'leaving.md',
-          kind: MergeKind.pushToRemote,
-          remote: entry('leaving.md')),
-      MergeItem(
-          path: 'both.md',
-          kind: MergeKind.conflict,
-          local: entry('both.md'),
-          remote: entry('both.md')),
-    ]);
+    final preview = SyncPreview(files: [
+      FilePreview(
+        item: item('arriving.md', MergeKind.pullToLocal),
+        kind: PreviewKind.update,
+        side: PreviewSide.here,
+        lines: const [
+          DiffLine(DiffOp.equal, 'a heading'),
+          DiffLine(DiffOp.insert, 'the line that is coming'),
+          DiffLine(DiffOp.delete, 'the line it replaces'),
+        ],
+      ),
+    ], folders: const []);
 
     await tester.pumpWidget(MaterialApp(
       localizationsDelegates: AppLocalizations.localizationsDelegates,
       supportedLocales: AppLocalizations.supportedLocales,
-      home: DeviceChangesPage(deviceName: 'Calm Otter', merge: merge),
+      home: MergePreviewPage(
+        folderName: 'vault',
+        deviceName: 'Calm Otter',
+        preview: preview,
+        readOnly: true,
+        title: 'Changes on Calm Otter',
+      ),
     ));
     await tester.pump();
 
     expect(find.text('Changes on Calm Otter'), findsOneWidget);
-    expect(find.text('comes here'), findsOneWidget);
-    // A file that is here and not there goes away there - said plainly and in
-    // the colour that means it.
-    expect(find.text('deleted there'), findsOneWidget);
-    expect(find.text('changed on both'), findsOneWidget);
+    await tester.tap(find.text('arriving.md'));
+    await tester.pumpAndSettle();
+
+    // The text itself, which is the point.
+    expect(find.textContaining('the line that is coming'), findsOneWidget);
+    expect(find.textContaining('the line it replaces'), findsOneWidget);
+    // And nothing here decides anything: that happens on the screen below,
+    // for every device at once.
+    expect(find.byType(FloatingActionButton), findsNothing);
   });
 
-  testWidgets('one file changed in several places is decided once, with every '
-      'copy laid out', (tester) async {
+  testWidgets('one file changed in several places is laid out side by side, '
+      'with a way to keep each', (tester) async {
     FileEntry entry(String path, int size, DateTime at) =>
         FileEntry(path: path, size: size, modified: at, hash: '$size');
 
@@ -155,17 +171,17 @@ void main() {
         sourceId: ConflictVariant.localSource,
         sourceName: 'This device',
         entry: entry('today.md', 120, DateTime.utc(2026, 8, 13, 9)),
-      ),
+      )..text = 'the paragraph I wrote at the desk',
       ConflictVariant(
         sourceId: 'phone',
         sourceName: 'Calm Otter',
         entry: entry('today.md', 340, DateTime.utc(2026, 8, 13, 18)),
-      ),
+      )..text = 'the paragraph I wrote on the train',
       ConflictVariant(
         sourceId: 'tablet',
         sourceName: 'Quiet Lynx',
         entry: entry('today.md', 120, DateTime.utc(2026, 8, 13, 9)),
-      ),
+      )..text = 'the paragraph I wrote at the desk',
     ]);
 
     // The newest is the starting point, not the decision.
@@ -193,8 +209,62 @@ void main() {
     // A copy identical to this device's is not a choice to weigh up.
     expect(find.text('same as this device'), findsOneWidget);
 
-    await tester.tap(find.text('This device'));
+    // And what each of them actually says, which is the question being asked.
+    expect(find.textContaining('at the desk'), findsNWidgets(2));
+    expect(find.textContaining('on the train'), findsOneWidget);
+
+    // One button per copy: the one already chosen says so, the others offer to
+    // take its place.
+    expect(find.text('Chosen'), findsOneWidget);
+    expect(find.text('Apply this one'), findsNWidgets(2));
+
+    // Pressed under this device's text, it keeps this device's text.
+    await tester.tap(find.text('Apply this one').first);
     expect(picked, ConflictVariant.localSource);
+  });
+
+  testWidgets('a narrow screen stacks the copies instead of splitting',
+      (tester) async {
+    tester.view.physicalSize = const Size(400, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    final conflict = PathConflict('today.md', [
+      ConflictVariant(
+        sourceId: ConflictVariant.localSource,
+        sourceName: 'This device',
+        entry: FileEntry(
+            path: 'today.md',
+            size: 12,
+            modified: DateTime.utc(2026, 8, 13, 9),
+            hash: 'a'),
+      )..text = 'at the desk',
+      ConflictVariant(
+        sourceId: 'phone',
+        sourceName: 'Calm Otter',
+        entry: FileEntry(
+            path: 'today.md',
+            size: 12,
+            modified: DateTime.utc(2026, 8, 13, 18),
+            hash: 'b'),
+      )..text = 'on the train',
+    ]);
+
+    await tester.pumpWidget(MaterialApp(
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
+      home: Scaffold(
+        body: ConflictAcrossDevices(conflict: conflict, chosen: 'phone'),
+      ),
+    ));
+    await tester.pump();
+
+    // One under the other, not two columns of nothing: on a phone there is no
+    // room for the second column to say anything.
+    final here = tester.getRect(find.text('at the desk'));
+    final there = tester.getRect(find.text('on the train'));
+    expect(there.top, greaterThan(here.bottom));
+    expect(tester.takeException(), isNull);
   });
 
   testWidgets('a conflict asks which device is right, and describes both',

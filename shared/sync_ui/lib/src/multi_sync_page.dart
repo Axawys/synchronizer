@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show ValueListenable;
 import 'package:flutter/material.dart';
 import 'package:sync_net/sync_net.dart';
 
@@ -8,11 +10,13 @@ import '../l10n/gen/app_localizations.dart';
 import 'fireworks.dart';
 import 'folder_choice.dart';
 import 'layout.dart';
+import 'merge_preview_page.dart';
 import 'storage.dart';
+import 'syncing_devices.dart';
 
 /// One device's copy of a file that several devices changed.
 class ConflictVariant {
-  const ConflictVariant({
+  ConflictVariant({
     required this.sourceId,
     required this.sourceName,
     required this.entry,
@@ -27,6 +31,18 @@ class ConflictVariant {
 
   /// The file as that device has it, or null where that device deleted it.
   final FileEntry? entry;
+
+  /// What this copy actually says, once it has been read.
+  ///
+  /// A size and a timestamp do not answer the question people are actually
+  /// asked here - which of these two is the paragraph I wrote - and choosing
+  /// by the newer date is guessing with extra steps. Null while it has not
+  /// been read, or when there is nothing to read: too big for a screen, not
+  /// text, or a copy that no longer exists.
+  String? text;
+
+  /// Whether the reading has been done, however it went.
+  bool read = false;
 
   bool get isLocal => sourceId == localSource;
   DateTime? get modified => entry?.modified;
@@ -128,6 +144,8 @@ class MultiSyncPage extends StatefulWidget {
     required this.trust,
     required this.folders,
     this.gather = true,
+    this.embedded = false,
+    this.onDone,
   });
 
   final DeviceInfo self;
@@ -143,7 +161,19 @@ class MultiSyncPage extends StatefulWidget {
 
   /// Whether to ask every device what it holds when the screen opens. Off in
   /// widget tests, which have no devices to ask.
+  ///
+  /// It also means this is a real run, started by a tap: asking is followed by
+  /// working out what would change, without waiting to be told twice.
   final bool gather;
+
+  /// Runs inside the device list rather than as a screen of its own, the same
+  /// way syncing with one device does. Levelling several is the same request -
+  /// "bring these into line" - and it should not cost an extra room either.
+  final bool embedded;
+
+  /// How the host is told there is nothing left to show: everything already
+  /// agreed, so the squares unfold and the list comes back.
+  final VoidCallback? onDone;
 
   @override
   State<MultiSyncPage> createState() => _MultiSyncPageState();
@@ -153,7 +183,6 @@ class _MultiSyncPageState extends State<MultiSyncPage> {
   static const _passes = 2;
 
   String? _folder;
-  final Set<String> _chosen = {};
   final Map<String, LevelEntry> _entries = {};
 
   /// What each device offers, by device id then folder name. Gathered when the
@@ -170,6 +199,16 @@ class _MultiSyncPageState extends State<MultiSyncPage> {
   bool _gathering = false;
   bool _previewing = false;
   bool _previewed = false;
+
+  /// Whether the working-out started by itself, off the back of the tap that
+  /// opened this. Only then is "everyone already agrees" a reason to leave: a
+  /// run the user asked for again by hand is a run they are watching.
+  bool _autoRun = false;
+
+  /// On the way out with nothing to show for it, and whether that has been
+  /// acted on.
+  bool _leaving = false;
+  bool _left = false;
   bool _running = false;
   bool _finished = false;
   bool _cancelled = false;
@@ -197,9 +236,6 @@ class _MultiSyncPageState extends State<MultiSyncPage> {
     super.initState();
     final shared = widget.folders.folders;
     if (shared.isNotEmpty) _folder = shared.first.name;
-    // Everything paired and present is in by default: the point of the screen
-    // is all of them.
-    _chosen.addAll(widget.devices.map((d) => d.id));
     if (widget.gather) _gather();
   }
 
@@ -237,6 +273,16 @@ class _MultiSyncPageState extends State<MultiSyncPage> {
     }
 
     if (mounted) setState(() => _gathering = false);
+
+    // Straight on with it. The tap that opened this said what to do, and every
+    // answer it would have asked for is already the obvious one: the folder
+    // this device shares, and all the devices there are. A screen of defaults
+    // with a button under it is a step that asks nothing.
+    if (mounted && _folder != null && widget.devices.isNotEmpty &&
+        !_previewed) {
+      _autoRun = true;
+      await _preview();
+    }
   }
 
   String? _pathOf(String folder) {
@@ -282,7 +328,6 @@ class _MultiSyncPageState extends State<MultiSyncPage> {
 
     final entries = <LevelEntry>[];
     for (final device in widget.devices) {
-      if (!_chosen.contains(device.id)) continue;
       final trusted = await widget.trust.get(device.id);
       if (trusted != null) entries.add(LevelEntry(device, trusted));
     }
@@ -310,44 +355,116 @@ class _MultiSyncPageState extends State<MultiSyncPage> {
       if (!mounted) return;
     }
 
+    // Worked out before the screen settles, so a conflict arrives as something
+    // to read rather than something to guess at.
+    final conflicts =
+        mounted ? await _studyConflicts(folder, root) : <PathConflict>[];
+    if (!mounted) return;
+
     if (mounted) {
       setState(() {
-        _conflicts = _collectConflicts();
+        _conflicts = conflicts;
         for (final conflict in _conflicts) {
           _winner[conflict.path] ??= conflict.newestSource;
         }
         _previewing = false;
         _previewed = true;
+        // Nothing anywhere. There is no table worth reading for that and no
+        // button worth pressing, so the squares unfold and this steps aside -
+        // the same answer the two-device sync gives to the same question.
+        if (_autoRun && _allSame) _leaving = true;
       });
     }
   }
 
-  /// Gathers every conflicting file across all the devices into one list, with
-  /// each device's copy of it beside this device's.
-  List<PathConflict> _collectConflicts() {
+  /// Back to the list, once the squares have grown into devices again.
+  void _leave() {
+    if (_left || !mounted) return;
+    _left = true;
+    final messenger = ScaffoldMessenger.of(context);
+    final message = AppLocalizations.of(context).levelAllSame;
+    if (widget.embedded) {
+      widget.onDone?.call();
+    } else {
+      Navigator.of(context).maybePop();
+    }
+    messenger.showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  /// Works out which of the files that came back different are actually
+  /// questions, and reads the copies of the ones that are.
+  ///
+  /// Not everything the merge calls a conflict is one to put to a person. Two
+  /// devices that edited different paragraphs of the same file have not
+  /// disagreed about anything: the edits combine, both survive, and the run
+  /// does it without asking. What is left - the same lines, changed two ways,
+  /// or a file that cannot be merged at all - is a real either/or, and those
+  /// are the ones laid out on the screen.
+  ///
+  /// Drawing that line here is what makes the answer mean something. While
+  /// every difference was listed, every one of them arrived with a copy
+  /// preselected, and honouring those would have turned off the merging
+  /// altogether.
+  ///
+  /// One session per device, however many of its files are in question: the
+  /// conversation is the expensive part, not the files - they are the ones
+  /// somebody edited by hand in two places.
+  Future<List<PathConflict>> _studyConflicts(
+    String folder,
+    Directory root,
+  ) async {
     final byPath = <String, Map<String, ConflictVariant>>{};
+    final here = AppLocalizations.of(context).conflictSideHere;
 
     for (final entry in _entries.values) {
-      for (final item in entry.pending?.conflicts ?? const <MergeItem>[]) {
-        final variants = byPath.putIfAbsent(item.path, () => {});
-        variants[ConflictVariant.localSource] = ConflictVariant(
-          sourceId: ConflictVariant.localSource,
-          sourceName: AppLocalizations.of(context).conflictSideHere,
-          entry: item.local,
+      final items = entry.pending?.conflicts ?? const <MergeItem>[];
+      if (items.isEmpty || entry.device.address == null) continue;
+
+      SyncClient? client;
+      try {
+        client = await SyncClient.connect(
+          entry.device.address!,
+          entry.device.port,
+          self: widget.self,
+          trusted: entry.trusted,
         );
-        variants[entry.device.id] = ConflictVariant(
-          sourceId: entry.device.id,
-          sourceName: entry.device.name,
-          entry: item.remote,
-        );
+        for (final item in items) {
+          final merged = await mergeConflict(client, folder, root, item);
+          // Settled by merging, so there is nothing to ask and nothing to
+          // show. The run does the same thing again when it gets there.
+          if (merged.isClean) continue;
+
+          // The merge has already read both copies to reach that verdict, so
+          // the text is here for the asking rather than a second download.
+          final readable = merged.isMergeable;
+          final variants = byPath.putIfAbsent(item.path, () => {});
+          variants[ConflictVariant.localSource] ??= ConflictVariant(
+            sourceId: ConflictVariant.localSource,
+            sourceName: here,
+            entry: item.local,
+          )
+            ..text = readable ? joinLines(merged.ourLines) : null
+            ..read = readable;
+          variants[entry.device.id] = ConflictVariant(
+            sourceId: entry.device.id,
+            sourceName: entry.device.name,
+            entry: item.remote,
+          )
+            ..text = readable ? joinLines(merged.theirLines) : null
+            ..read = readable;
+        }
+      } catch (_) {
+        // It answered a moment ago and does not now. Its files stay off the
+        // list, and the run falls back to asking about them one at a time.
+      } finally {
+        await client?.close();
       }
     }
 
-    final conflicts = [
+    return [
       for (final path in byPath.keys.toList()..sort())
         PathConflict(path, byPath[path]!.values.toList()),
     ];
-    return conflicts;
   }
 
   Future<void> _previewOne(
@@ -382,6 +499,81 @@ class _MultiSyncPageState extends State<MultiSyncPage> {
     } finally {
       await client?.close();
     }
+  }
+
+  /// Opens what is waiting for one device, line by line.
+  ///
+  /// A list of file names cannot answer the question people actually open this
+  /// with - is the paragraph I wrote last night the one arriving, or the one
+  /// about to be overwritten - so this fetches the changed files from that
+  /// device and shows the same diff the two-device screen shows, with nothing
+  /// to press: conflicts are settled on the screen below, for all the devices
+  /// at once.
+  ///
+  /// The contents are fetched when asked for rather than during the sweep. It
+  /// is a download either way, and doing it for every device up front would be
+  /// a download before anybody has decided to look.
+  Future<void> _openChanges(LevelEntry entry) async {
+    final folder = _folder;
+    final merge = entry.pending;
+    final path = folder == null ? null : _pathOf(folder);
+    if (folder == null || merge == null || path == null) return;
+
+    final l10n = AppLocalizations.of(context);
+    final progress = ValueNotifier<SyncProgress>(
+        SyncProgress(SyncPhase.reading, total: merge.items.length));
+    unawaited(showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => _ReadingDialog(progress: progress),
+    ));
+
+    SyncClient? client;
+    SyncPreview? preview;
+    String? failure;
+    try {
+      client = await SyncClient.connect(
+        entry.device.address!,
+        entry.device.port,
+        self: widget.self,
+        trusted: entry.trusted,
+      );
+      preview = await buildPreview(
+        client,
+        folder,
+        Directory(path),
+        merge,
+        onProgress: (value) => progress.value = value,
+      );
+    } catch (e) {
+      failure = '$e';
+    } finally {
+      await client?.close();
+    }
+
+    if (!mounted) {
+      progress.dispose();
+      return;
+    }
+    Navigator.of(context).pop(); // the reading dialog
+    progress.dispose();
+
+    if (preview == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(l10n.couldNotPreparePreview('$failure'))),
+      );
+      return;
+    }
+
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => MergePreviewPage(
+        folderName: folder,
+        deviceName: entry.device.name,
+        preview: preview!,
+        readOnly: true,
+        title: l10n.levelChangesOn(entry.device.name),
+      ),
+    ));
   }
 
   Future<void> _run() async {
@@ -429,6 +621,12 @@ class _MultiSyncPageState extends State<MultiSyncPage> {
       // and a second trip round would be the same conversation twice.
       if (moved == 0) break;
     }
+
+    // Once round, and only then: the texts behind every ancestor still in use
+    // are worth keeping, and which those are is only known here, where all the
+    // devices are. A pass that pruned to its own pair would throw away what
+    // the next device in the round is about to merge against.
+    await pruneBaseStore(root, await BaseManifests.forFolder(folder));
 
     if (mounted) {
       final worked = _entries.values.every((e) => e.state != LevelState.failed);
@@ -529,25 +727,34 @@ class _MultiSyncPageState extends State<MultiSyncPage> {
           resolved.add(ResolvedMerge.natural(item));
           continue;
         }
+        // Decided before the run, on the screen where every copy was laid out
+        // side by side - and that decision is the answer, not a hint.
+        //
+        // Merging was tried first here once, and it is how a chosen copy could
+        // be quietly thrown away: the second device's merge sees the copy the
+        // first pass just brought in as the ancestor, concludes that only the
+        // other side changed anything, and takes that side. The run then
+        // reported success over a file that says what nobody picked.
+        final winner = _winner[item.path];
+        if (winner != null) {
+          // Take this device's copy when it is the one that won; otherwise the
+          // meeting point already holds the winner, or is about to.
+          resolved.add(
+              ResolvedMerge(item, toLocal: winner == entry.device.id));
+          continue;
+        }
+
+        // Not asked about, which means the working-out found the two edits
+        // could be combined. Anything that appeared since - the files are
+        // live - falls back to asking.
         final merged = await mergeConflict(client, folder, root, item);
         if (merged.isClean) {
           // Edits in different places: both survive, and nobody needs asking.
           resolved.add(ResolvedMerge.merged(item, merged.merge!.clean!));
           continue;
         }
-        // Decided before the run, on the screen where every copy was laid out
-        // side by side. Anything not on that list appeared since - the files
-        // are live - and falls back to asking.
-        final winner = _winner[item.path];
-        final bool keepLocal;
-        if (winner == null) {
-          keepLocal = await _whichDevice(item, entry);
-          if (!mounted) return 0;
-        } else {
-          // Take this device's copy when it is the one that won; otherwise the
-          // meeting point already holds the winner, or is about to.
-          keepLocal = winner != entry.device.id;
-        }
+        final keepLocal = await _whichDevice(item, entry);
+        if (!mounted) return 0;
         resolved.add(ResolvedMerge(item, toLocal: !keepLocal));
       }
 
@@ -611,22 +818,55 @@ class _MultiSyncPageState extends State<MultiSyncPage> {
     final l10n = AppLocalizations.of(context);
     final shared = widget.folders.folders;
 
+    final body = Stack(
+      children: [
+        // Asking round and working out what would change takes a network
+        // round-trip per device, and it is the same wait as a two-device sync -
+        // so it is the same picture: this device on the left, everyone else
+        // rolling at it, which is also what a hub run does.
+        if (_waiting)
+          SyncingDevices(
+            self: widget.self,
+            peers: _inRun,
+            caption: _waitCaption(l10n),
+            unfold: _leaving,
+            onUnfolded: _leave,
+          )
+        else
+          _content(context, l10n, shared),
+        if (_celebrating)
+          Positioned.fill(
+            child: Fireworks(
+              // After the frame, not during it: with the system asking for
+              // less motion this comes back immediately, from inside the
+              // build that put it on screen.
+              onDone: () =>
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) setState(() => _celebrating = false);
+              }),
+            ),
+          ),
+      ],
+    );
+
+    if (widget.embedded) return body;
     return Scaffold(
       appBar: AppBar(title: Text(l10n.allPairedDevices)),
-      body: Stack(
-        children: [
-          _content(context, l10n, shared),
-          if (_celebrating)
-            Positioned.fill(
-              child: Fireworks(
-                onDone: () {
-                  if (mounted) setState(() => _celebrating = false);
-                },
-              ),
-            ),
-        ],
-      ),
+      body: body,
     );
+  }
+
+  /// Whether there is nothing to read yet: still asking, still working it out,
+  /// or on the way back out with nothing to show.
+  bool get _waiting => _gathering || _previewing || _leaving;
+
+  /// The devices this run is about, which is what the animation shows: all of
+  /// them that are present.
+  List<DeviceInfo> get _inRun => widget.devices;
+
+  String _waitCaption(AppLocalizations l10n) {
+    if (_leaving) return l10n.levelAllSame;
+    return _gathering ? l10n.gatheringFolders : l10n.levelPreviewing;
   }
 
   Widget _content(
@@ -709,27 +949,11 @@ class _MultiSyncPageState extends State<MultiSyncPage> {
                 ),
               ),
               const SizedBox(height: Layout.gutter),
-              _Heading(l10n.chooseDevices),
-              for (final device in widget.devices)
-                CheckboxListTile(
-                  value: _chosen.contains(device.id),
-                  onChanged: _running
-                      ? null
-                      : (on) => setState(() {
-                            _previewed = false;
-                            if (on ?? false) {
-                              _chosen.add(device.id);
-                            } else {
-                              _chosen.remove(device.id);
-                            }
-                          }),
-                  title: Text(device.name),
-                  subtitle: _entries[device.id] == null
-                      ? null
-                      : Text(_status(_entries[device.id]!, l10n)),
-                  contentPadding: EdgeInsets.zero,
-                ),
-              const SizedBox(height: Layout.gutter),
+              // No list of devices to tick here. Every paired device present is
+              // in it: the folder is the same folder on all of them, and a run
+              // that leaves one out puts that one a version behind without
+              // saying so. What each of them is doing is said below, where the
+              // changes are.
               _Note(text: l10n.levelPlainNote),
               const SizedBox(height: Layout.gutter),
               // Devices with what is waiting for each, once it is known: the
@@ -740,14 +964,7 @@ class _MultiSyncPageState extends State<MultiSyncPage> {
                     entry: entry,
                     onOpen: entry.pending == null || entry.pending!.isEmpty
                         ? null
-                        : () => Navigator.of(context).push(
-                              MaterialPageRoute<void>(
-                                builder: (_) => DeviceChangesPage(
-                                  deviceName: entry.device.name,
-                                  merge: entry.pending!,
-                                ),
-                              ),
-                            ),
+                        : () => _openChanges(entry),
                   ),
               // Everything that came back different from more than one place,
               // with every copy of it - decided here, before anything is
@@ -817,7 +1034,9 @@ class _MultiSyncPageState extends State<MultiSyncPage> {
                 // Nothing is written until this has been pressed and read.
                 FilledButton.icon(
                   onPressed:
-                      _chosen.isEmpty || _folder == null ? null : _preview,
+                      widget.devices.isEmpty || _folder == null
+                          ? null
+                          : _preview,
                   icon: const Icon(Icons.difference_outlined),
                   label: Text(l10n.levelPreview),
                 )
@@ -825,7 +1044,8 @@ class _MultiSyncPageState extends State<MultiSyncPage> {
               // nothing is not something to offer.
               else if (!_allSame)
                 FilledButton.icon(
-                  onPressed: _chosen.isEmpty || _folder == null ? null : _run,
+                  onPressed:
+                      widget.devices.isEmpty || _folder == null ? null : _run,
                   icon: const Icon(Icons.hub),
                   label: Text(l10n.levelStart),
                 ),
@@ -839,17 +1059,6 @@ class _MultiSyncPageState extends State<MultiSyncPage> {
     );
   }
 
-  String _status(LevelEntry entry, AppLocalizations l10n) =>
-      switch (entry.state) {
-        LevelState.waiting => l10n.levelWaiting,
-        LevelState.checking => l10n.levelCheckingFolders,
-        LevelState.needsFolder =>
-          l10n.levelNeedsFolderAsked(entry.device.name, _folder ?? ''),
-        LevelState.working => l10n.levelWorking,
-        LevelState.done => l10n.levelDone(entry.changes),
-        LevelState.skipped => l10n.levelSkipped,
-        LevelState.failed => l10n.levelFailed(entry.error ?? ''),
-      };
 }
 
 /// One folder, and where every device stands on it.
@@ -936,19 +1145,15 @@ class FolderAcrossDevices extends StatelessWidget {
             ),
             for (final (device, dir) in devices)
               _Where(
+                // What each of them holds under this name. Not where they keep
+                // it: the row is here to be compared with the one above it, and
+                // the weights are what compare.
                 title: device.name,
-                // The same line as this device's, now that the far end says
-                // where it keeps the folder: two devices reporting the same
-                // weight from folders with different names is the whole of
-                // "why did that sync do nothing".
                 detail: dir == null
                     ? l10n.folderNotOffered
                     : dir.missing
                         ? l10n.folderMissingThere
-                        : dir.path == null
-                            ? formatSize(l10n, dir.bytes ?? 0)
-                            : '${prettyPath(dir.path!)} · '
-                                '${formatSize(l10n, dir.bytes ?? 0)}',
+                        : formatSize(l10n, dir.bytes ?? 0),
                 missing: dir == null || dir.missing,
               ),
           ],
@@ -1004,8 +1209,13 @@ class _Where extends StatelessWidget {
   }
 }
 
-/// One conflicting file with every device's copy of it, and the choice of which
-/// one everybody ends up with.
+/// One conflicting file, with what every device claims it says, side by side.
+///
+/// A file changed in two places is not a question about sizes and timestamps,
+/// which is what this used to offer: two lines of metadata and a radio button.
+/// The question is which of these two is the paragraph you wrote, and the only
+/// thing that answers it is the text. So the block splits - a column per
+/// device, each with what that copy says and a button under it to keep it.
 class ConflictAcrossDevices extends StatelessWidget {
   const ConflictAcrossDevices({
     super.key,
@@ -1018,33 +1228,17 @@ class ConflictAcrossDevices extends StatelessWidget {
   final String? chosen;
   final void Function(String sourceId)? onChoose;
 
+  /// Under this the columns go one above the other: two columns of text on a
+  /// phone are two columns of nothing.
+  static const double splitAt = 520;
+
+  /// How much of a long file to show before it has to be scrolled. Enough to
+  /// see which one it is; the rest is a swipe away.
+  static const double paneHeight = 220;
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final colours = theme.colorScheme;
-    final l10n = AppLocalizations.of(context);
-
-    final local = conflict.variants
-        .where((v) => v.isLocal)
-        .map((v) => v.entry?.hash)
-        .firstOrNull;
-    final newest = conflict.newestSource;
-
-    String describe(ConflictVariant variant) {
-      if (variant.entry == null) return l10n.conflictMissing;
-      if (!variant.isLocal && variant.entry!.hash == local) {
-        // Nothing to choose between: it is the same file.
-        return l10n.variantSameAsHere;
-      }
-      final when = variant.entry!.modified.toLocal();
-      String two(int n) => n.toString().padLeft(2, '0');
-      final stamp = '${two(when.day)}.${two(when.month)} '
-          '${two(when.hour)}:${two(when.minute)}';
-      final size = formatSize(l10n, variant.entry!.size);
-      return variant.sourceId == newest
-          ? '$size, $stamp · ${l10n.variantNewest}'
-          : '$size, $stamp';
-    }
 
     return Padding(
       padding: const EdgeInsets.only(bottom: Layout.gap),
@@ -1057,48 +1251,169 @@ class ConflictAcrossDevices extends StatelessWidget {
               style: theme.textTheme.titleSmall
                   ?.copyWith(fontWeight: FontWeight.w600),
             ),
-            const SizedBox(height: Layout.snug),
-            for (final variant in conflict.variants)
-              InkWell(
-                onTap: onChoose == null
-                    ? null
-                    : () => onChoose!(variant.sourceId),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 2),
-                  child: Row(
+            const SizedBox(height: Layout.gap),
+            LayoutBuilder(
+              builder: (context, box) {
+                final panes = [
+                  for (final variant in conflict.variants)
+                    _pane(context, variant),
+                ];
+                if (box.maxWidth < splitAt) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Icon(
-                        variant.sourceId == chosen
-                            ? Icons.radio_button_checked
-                            : Icons.radio_button_unchecked,
-                        size: 18,
-                        color: variant.sourceId == chosen
-                            ? colours.primary
-                            : colours.onSurfaceVariant,
-                      ),
-                      const SizedBox(width: Layout.gap),
-                      Expanded(
-                        child: Text(
-                          variant.sourceName,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.bodyMedium,
-                        ),
-                      ),
-                      const SizedBox(width: Layout.snug),
-                      Text(
-                        describe(variant),
-                        style: theme.textTheme.bodySmall
-                            ?.copyWith(color: colours.onSurfaceVariant),
-                      ),
+                      for (var i = 0; i < panes.length; i++) ...[
+                        if (i > 0) const SizedBox(height: Layout.gap),
+                        panes[i],
+                      ],
                     ],
-                  ),
-                ),
-              ),
+                  );
+                }
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (var i = 0; i < panes.length; i++) ...[
+                      if (i > 0) const SizedBox(width: Layout.gap),
+                      Expanded(child: panes[i]),
+                    ],
+                  ],
+                );
+              },
+            ),
           ],
         ),
       ),
     );
+  }
+
+  /// One device's claim: whose it is, what it says, and the way to keep it.
+  Widget _pane(BuildContext context, ConflictVariant variant) {
+    final theme = Theme.of(context);
+    final colours = theme.colorScheme;
+    final l10n = AppLocalizations.of(context);
+    final picked = variant.sourceId == chosen;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // Name over detail rather than beside it: a column of a pane is narrow,
+        // and a device name pushed into an ellipsis by a timestamp is the one
+        // thing on it that has to stay readable.
+        Text(
+          variant.sourceName,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: theme.textTheme.labelLarge?.copyWith(
+            fontWeight: FontWeight.w600,
+            color: picked ? colours.primary : null,
+          ),
+        ),
+        Text(
+          _describe(l10n, variant),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: theme.textTheme.bodySmall
+              ?.copyWith(color: colours.onSurfaceVariant),
+        ),
+        const SizedBox(height: Layout.snug),
+        Container(
+          width: double.infinity,
+          constraints: const BoxConstraints(maxHeight: paneHeight),
+          padding: const EdgeInsets.all(Layout.gap),
+          decoration: BoxDecoration(
+            color: colours.surfaceContainerHighest,
+            borderRadius: Layout.badgeCorners,
+            border: Border.all(
+              color: picked ? colours.primary : colours.outlineVariant,
+              width: picked ? 1.5 : 1,
+            ),
+          ),
+          child: _body(context, variant),
+        ),
+        const SizedBox(height: Layout.snug),
+        // Under the text it belongs to, not at the bottom of the card: with two
+        // columns of writing on screen, a button anywhere else is a button
+        // about neither of them.
+        SizedBox(
+          width: double.infinity,
+          child: picked
+              ? FilledButton.tonalIcon(
+                  onPressed: null,
+                  icon: const Icon(Icons.check, size: 18),
+                  label: Text(l10n.conflictChosen),
+                )
+              : FilledButton(
+                  onPressed: onChoose == null
+                      ? null
+                      : () => onChoose!(variant.sourceId),
+                  child: Text(l10n.conflictApply),
+                ),
+        ),
+      ],
+    );
+  }
+
+  /// The text itself, or why there is none to show.
+  Widget _body(BuildContext context, ConflictVariant variant) {
+    final theme = Theme.of(context);
+    final colours = theme.colorScheme;
+    final l10n = AppLocalizations.of(context);
+
+    final text = variant.text;
+    String? note;
+    if (variant.entry == null) {
+      note = l10n.conflictDeletedHere;
+    } else if (text == null) {
+      // Read and found to be something else, or not read at all: two different
+      // things, and only one of them is worth trying again for.
+      note = variant.read ? l10n.conflictNotText : l10n.conflictCouldNotRead;
+    } else if (text.trim().isEmpty) {
+      note = l10n.sizeEmpty;
+    }
+
+    if (note != null) {
+      return Text(
+        note,
+        style: theme.textTheme.bodySmall?.copyWith(
+          color: colours.onSurfaceVariant,
+          fontStyle: FontStyle.italic,
+        ),
+      );
+    }
+
+    return SingleChildScrollView(
+      child: Text(
+        text!,
+        style: theme.textTheme.bodySmall?.copyWith(
+          fontFamily: 'monospace',
+          height: 1.35,
+        ),
+      ),
+    );
+  }
+
+  /// The line beside the name: how big, when, and whether it is the newest or
+  /// simply the same file under another name.
+  String _describe(AppLocalizations l10n, ConflictVariant variant) {
+    if (variant.entry == null) return l10n.conflictMissing;
+
+    final local = conflict.variants
+        .where((v) => v.isLocal)
+        .map((v) => v.entry?.hash)
+        .firstOrNull;
+    if (!variant.isLocal && variant.entry!.hash == local) {
+      return l10n.variantSameAsHere;
+    }
+
+    final when = variant.entry!.modified.toLocal();
+    String two(int n) => n.toString().padLeft(2, '0');
+    final stamp = '${two(when.day)}.${two(when.month)} '
+        '${two(when.hour)}:${two(when.minute)}';
+    final size = formatSize(l10n, variant.entry!.size);
+    return variant.sourceId == conflict.newestSource
+        ? '$size, $stamp · ${l10n.variantNewest}'
+        : '$size, $stamp';
   }
 }
 
@@ -1185,97 +1500,32 @@ class DeviceChanges extends StatelessWidget {
   }
 }
 
-/// Every file that will change on one device, and which way it goes.
-///
-/// Not the line-by-line preview the two-device screen shows: that needs the
-/// contents of every changed file fetched from the other device, and doing it
-/// for each of several devices would be a download before a decision. This is
-/// the list, which is what "what will happen to this device" actually means.
-class DeviceChangesPage extends StatelessWidget {
-  const DeviceChangesPage({
-    super.key,
-    required this.deviceName,
-    required this.merge,
-  });
+/// What the app is doing while it fetches a device's changed files: the same
+/// count the sync itself reports, because this is the same reading.
+class _ReadingDialog extends StatelessWidget {
+  const _ReadingDialog({required this.progress});
 
-  final String deviceName;
-  final MergeResult merge;
+  final ValueListenable<SyncProgress> progress;
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final colours = theme.colorScheme;
     final l10n = AppLocalizations.of(context);
-
-    return Scaffold(
-      appBar: AppBar(title: Text(l10n.levelChangesOn(deviceName))),
-      body: ContentPane(
-        child: ListView.builder(
-          padding: const EdgeInsets.fromLTRB(
-              Layout.gutter, Layout.gap, Layout.gutter, Layout.section),
-          itemCount: merge.items.length,
-          itemBuilder: (context, i) {
-            final item = merge.items[i];
-            final removing = (item.kind == MergeKind.pushToRemote &&
-                    item.local == null) ||
-                (item.kind == MergeKind.pullToLocal && item.remote == null);
-            final label = switch (item.kind) {
-              MergeKind.conflict => l10n.changeConflict,
-              MergeKind.pullToLocal => item.remote == null
-                  ? l10n.changeDeletedHere
-                  : l10n.changeComesHere,
-              MergeKind.pushToRemote => item.local == null
-                  ? l10n.changeDeletedThere
-                  : l10n.changeGoesThere,
-            };
-
-            return Padding(
-              padding: const EdgeInsets.only(bottom: Layout.snug),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(
-                    removing
-                        ? Icons.delete_outline
-                        : item.kind == MergeKind.conflict
-                            ? Icons.warning_amber_outlined
-                            : item.kind == MergeKind.pullToLocal
-                                ? Icons.south_west
-                                : Icons.north_east,
-                    size: 18,
-                    color: removing ? colours.error : colours.onSurfaceVariant,
-                  ),
-                  const SizedBox(width: Layout.gap),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          item.path,
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            color: removing ? colours.error : null,
-                            fontWeight: removing ? FontWeight.w600 : null,
-                          ),
-                        ),
-                        Text(
-                          label,
-                          style: theme.textTheme.bodySmall?.copyWith(
-                              color: removing
-                                  ? colours.error
-                                  : colours.onSurfaceVariant),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
+    return AlertDialog(
+      content: ValueListenableBuilder<SyncProgress>(
+        valueListenable: progress,
+        builder: (context, value, _) => Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            LinearProgressIndicator(value: value.fraction),
+            const SizedBox(height: Layout.gap),
+            Text(l10n.syncReading(value.done, value.total)),
+          ],
         ),
       ),
     );
   }
 }
+
 
 /// The answer to one conflict: whose copy, and whether to stop asking.
 class ConflictChoice {

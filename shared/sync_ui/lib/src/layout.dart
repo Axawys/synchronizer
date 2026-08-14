@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:sync_net/sync_net.dart';
 
 import '../l10n/gen/app_localizations.dart';
 
@@ -188,6 +189,15 @@ class Tag extends StatelessWidget {
   }
 }
 
+/// What a device looks like at a glance. One icon per platform, in one place:
+/// the device list, the waiting screen and anything else showing a device
+/// should not each have their own idea of what a phone looks like.
+IconData deviceIcon(DevicePlatform platform) => switch (platform) {
+      DevicePlatform.android => Icons.smartphone,
+      DevicePlatform.linux => Icons.computer,
+      DevicePlatform.unknown => Icons.devices_other,
+    };
+
 /// A path as a person reads it: the end, which says which folder this is, and
 /// as much of the front as fits.
 ///
@@ -198,10 +208,10 @@ class Tag extends StatelessWidget {
 /// still too long keeps its last segments, because the end of a path is the
 /// part that names the folder.
 ///
-/// Paths shown here now come from other devices too, so somebody else's home
-/// counts as one: `/home/axawys/Documents/Obsidian`, read on a phone, matches
-/// no home this device has and would otherwise be shown in full - four segments
-/// of which two say only "a Linux machine, somebody's account".
+/// Somebody else's home counts as one too: a path this device did not write -
+/// `/home/axawys/Documents/Obsidian` read on a phone - matches no home here and
+/// would otherwise be shown in full, four segments of which two say only "a
+/// Linux machine, somebody's account".
 String prettyPath(
   String path, {
   int keepSegments = 3,
@@ -247,17 +257,23 @@ String? get _home {
 /// which is the vault and which is a stub, while "1.2 GB" and "8 kB" settle it.
 /// One decimal below ten units and none above, because the difference between
 /// 1.2 GB and 1.24 GB is not a difference anyone is acting on.
+///
+/// Kilobytes run all the way to a hundred megabytes, which is further than a
+/// unit table would take them. A vault of notes lives in that range from one
+/// end of its life to the other, and "24500 kB" against "3800 kB" is two
+/// numbers on the same scale, where "24 MB" against "3.8 MB" asks the reader to
+/// do the conversion before they can compare the two devices in front of them.
 String formatSize(AppLocalizations l10n, int bytes) {
   if (bytes <= 0) return l10n.sizeEmpty;
   if (bytes < 1000) return l10n.sizeBytes('$bytes');
+  if (bytes < 100 * 1000 * 1000) {
+    return l10n.sizeKilobytes(_round(bytes / 1000));
+  }
 
-  var value = bytes / 1000;
-  if (value < 1000) return l10n.sizeKilobytes(_round(value));
+  final megabytes = bytes / (1000 * 1000);
+  if (megabytes < 1000) return l10n.sizeMegabytes(_round(megabytes));
 
-  value /= 1000;
-  if (value < 1000) return l10n.sizeMegabytes(_round(value));
-
-  return l10n.sizeGigabytes(_round(value / 1000));
+  return l10n.sizeGigabytes(_round(megabytes / 1000));
 }
 
 String _round(double value) =>

@@ -100,7 +100,12 @@ Future<MergedConflict> mergeConflict(
   final ourLines = splitLines(utf8.decode(localBytes));
   final theirLines = splitLines(utf8.decode(remoteBytes));
 
-  final baseText = await BaseStore(localRoot).read(item.path);
+  // This pair's ancestor, asked for by the hash their own base manifest
+  // recorded - not "the ancestor of this file", which is a thing that does not
+  // exist once a folder is synced with more than one device.
+  final baseHash = item.base?.hash;
+  final baseText =
+      baseHash == null ? null : await BaseStore(localRoot).read(baseHash);
   final known = baseText != null;
   final base =
       known ? splitLines(baseText) : commonBase(ourLines, theirLines);
@@ -114,33 +119,40 @@ Future<MergedConflict> mergeConflict(
   );
 }
 
-/// Brings the base copies in line with what the two devices have just agreed
-/// on, so the next sync has an ancestor to merge against.
+/// Keeps the text of everything the folder now holds, so the next sync with
+/// any device has an ancestor to merge against.
 ///
-/// Only files whose content actually moved are rewritten - comparing the old
-/// base manifest with the new one is what identifies them - so this costs a
-/// full pass over the folder only on a first sync.
-Future<void> refreshBaseStore(
-  Directory localRoot,
-  Manifest previousBase,
-  Manifest current,
-) async {
+/// Stored under each file's hash, so a version stays findable however many
+/// other syncs happen in between - which is what a folder shared with several
+/// devices needs, since each pair agreed at a different moment. Anything
+/// already stored is left alone: the same hash is the same bytes.
+Future<void> refreshBaseStore(Directory localRoot, Manifest current) async {
   final store = BaseStore(localRoot);
 
   for (final entry in current.entries.values) {
-    if (previousBase.entries[entry.path]?.hash == entry.hash &&
-        store.fileFor(entry.path).existsSync()) {
-      continue; // unchanged and already kept
-    }
+    if (store.fileFor(entry.hash).existsSync()) continue;
     final file = _localFile(localRoot, entry.path);
     if (file.existsSync()) {
-      await store.write(entry.path, await file.readAsBytes());
+      await store.write(entry.hash, await file.readAsBytes());
     }
   }
+}
 
-  for (final path in previousBase.entries.keys) {
-    if (!current.entries.containsKey(path)) await store.remove(path);
-  }
+/// Throws away the ancestors nobody can still need.
+///
+/// [inUse] is every manifest that still counts for this folder: what it holds
+/// now, and what each device it syncs with last agreed on. Only the caller
+/// knows the full set of pairs, which is why this is not done as part of a
+/// sync - a run that pruned to its own pair's ancestors would delete the ones
+/// the next device is about to merge against.
+Future<void> pruneBaseStore(
+  Directory localRoot,
+  Iterable<Manifest> inUse,
+) async {
+  await BaseStore(localRoot).keep({
+    for (final manifest in inUse)
+      for (final entry in manifest.entries.values) entry.hash,
+  });
 }
 
 /// Raised when the folder a sync points at has gone missing, and the last sync
@@ -336,7 +348,7 @@ Future<SyncOutcome> runSync(
   if (!report.ok) return SyncOutcome(report: report, newBase: null);
 
   final current = await Manifest.scan(localRoot);
-  await refreshBaseStore(localRoot, base, current);
+  await refreshBaseStore(localRoot, current);
   return SyncOutcome(report: report, newBase: current);
 }
 

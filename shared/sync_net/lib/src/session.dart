@@ -40,27 +40,9 @@ abstract final class SessionType {
 
 /// A directory this device offers to a peer, addressed by [name].
 class SharedDir {
-  const SharedDir(
-    this.name, {
-    this.path,
-    this.files,
-    this.bytes,
-    this.missing = false,
-  });
+  const SharedDir(this.name, {this.files, this.bytes, this.missing = false});
 
   final String name;
-
-  /// Where the device that offers it keeps it, as that device sees it.
-  ///
-  /// It used to stay at home on principle. The principle cost more than it was
-  /// worth: the folder being the wrong folder is the one failure that looks
-  /// exactly like success - "already in sync" over an empty vault - and the
-  /// path is what settles it at a glance. It only ever goes to a device that
-  /// has been paired with and has authenticated, and it says nothing that
-  /// device could not learn by asking for the folder's contents.
-  ///
-  /// Null from a device too old to say.
-  final String? path;
 
   /// How many files it holds, and what they weigh, when the far end said. Null
   /// from a device too old to say, which is not the same as zero and must not
@@ -227,7 +209,6 @@ class SyncClient {
     return list
         .map((d) => SharedDir(
               d['name']! as String,
-              path: d['path'] as String?,
               files: d['files'] as int?,
               bytes: d['bytes'] as int?,
               missing: d['missing'] == true,
@@ -415,7 +396,11 @@ Future<void> handleSession(
   await conn.close();
 }
 
-/// The folders this device offers, each with where it is and how much is in it.
+/// The folders this device offers, each with how much is in it.
+///
+/// Where a folder lives is not part of the answer: it is the offering device's
+/// business, nothing on the other end shows it, and a path is a small thing to
+/// hand over for nothing in return.
 ///
 /// The measurement costs a walk of the directory, which is worth it: it is what
 /// lets the other device show "1.2 GB there, nothing here" before anything is
@@ -434,7 +419,6 @@ Future<void> _serveDirs(
     dirs.add({
       'name': dir.name,
       'missing': !exists,
-      if (path != null) 'path': path,
       if (size != null) 'files': size.files,
       if (size != null) 'bytes': size.bytes,
     });

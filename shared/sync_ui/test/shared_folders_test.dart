@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -84,4 +85,57 @@ void main() {
     expect(find.text('Choose a folder'), findsOneWidget);
     expect(find.text('Replace folder'), findsNothing);
   });
+
+  testWidgets('an empty folder is asked about when the app opens',
+      (tester) async {
+    final vault = Directory.systemTemp.createTempSync('empty_vault');
+    addTearDown(() => vault.deleteSync(recursive: true));
+
+    final folders = SharedFolders();
+    await folders.choose(vault.path);
+
+    await _open(tester, folders);
+
+    // Either this device is waiting for its first sync or it is pointed at the
+    // wrong folder, and the second is how a vault gets emptied on the other
+    // device. Asking is cheap; finding out afterwards is not.
+    expect(find.textContaining('has nothing in it'), findsOneWidget);
+    expect(find.text('Not now'), findsOneWidget);
+  });
+
+  testWidgets('a folder with a vault in it is left alone', (tester) async {
+    final vault = Directory.systemTemp.createTempSync('full_vault');
+    addTearDown(() => vault.deleteSync(recursive: true));
+    File('${vault.path}/note.md').writeAsStringSync('something');
+
+    final folders = SharedFolders();
+    await folders.choose(vault.path);
+
+    await _open(tester, folders);
+
+    expect(find.byType(AlertDialog), findsNothing);
+  });
+
+  testWidgets('with no folder at all it says what to do', (tester) async {
+    await _open(tester, SharedFolders());
+
+    expect(find.text('Nothing to sync yet'), findsOneWidget);
+    expect(find.text('Choose a folder'), findsOneWidget);
+  });
+}
+
+/// Runs the check the app runs when it opens, with the clock turning:
+/// measuring a folder is real disk work, which a widget test's fake clock does
+/// not carry.
+Future<void> _open(WidgetTester tester, SharedFolders folders) async {
+  await tester.pumpWidget(MaterialApp(
+    localizationsDelegates: AppLocalizations.localizationsDelegates,
+    supportedLocales: AppLocalizations.supportedLocales,
+    home: const Scaffold(body: SizedBox.shrink()),
+  ));
+  await tester.runAsync(() async {
+    ensureStorageReady(tester.element(find.byType(Scaffold)), folders);
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+  });
+  await tester.pumpAndSettle();
 }

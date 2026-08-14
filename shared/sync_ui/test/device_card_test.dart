@@ -86,19 +86,16 @@ void main() {
     await tester.pumpWidget(host(const DeviceCard(
       device: phone,
       paired: true,
-      folders: [
-        SharedDir('Obsidian',
-            path: '/storage/emulated/0/Documents/Obsidian',
-            files: 120,
-            bytes: 24500000),
-      ],
+      folders: [SharedDir('Obsidian', files: 120, bytes: 24500000)],
     )));
 
     // The address is how the app finds it, not how a person recognises it -
-    // and the weight is what says whether that folder holds the vault.
+    // and the weight is what says whether that folder holds the vault. Where
+    // that device keeps it is its own business.
     expect(find.text('192.168.1.24:47800'), findsNothing);
-    expect(find.text('/Documents/Obsidian'), findsOneWidget);
-    expect(find.text(' · 25 MB'), findsOneWidget);
+    expect(find.text('Obsidian'), findsOneWidget);
+    expect(find.textContaining('/'), findsNothing);
+    expect(find.text(' · 24500 kB'), findsOneWidget);
   });
 
   testWidgets('"paired" sits by the name and leaves the folder line the row',
@@ -106,10 +103,7 @@ void main() {
     await tester.pumpWidget(host(const DeviceCard(
       device: phone,
       paired: true,
-      folders: [
-        SharedDir('Obsidian',
-            path: '/home/axawys/Documents/Obsidian', bytes: 24500000),
-      ],
+      folders: [SharedDir('Obsidian', bytes: 24500000)],
     )));
 
     // It says something about the device, so it belongs against the name.

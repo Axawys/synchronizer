@@ -68,18 +68,6 @@ void main() {
     expect(dirs.single.missing, isFalse);
   });
 
-  test('a folder says where it is, so the wrong folder can be seen to be wrong',
-      () async {
-    // Two devices reporting "in sync" while one of them is empty is the one
-    // failure that looks like success, and the path is what settles it: a
-    // person reading the two cards can see that one of them is pointed
-    // somewhere they did not mean.
-    session = await connect({'notes': vault.path});
-    final dirs = await session.listDirectories();
-
-    expect(dirs.single.path, vault.path);
-  });
-
   test('an empty folder says zero, which is a different thing from silence',
       () async {
     session = await connect({'notes': vault.path});
