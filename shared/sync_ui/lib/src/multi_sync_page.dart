@@ -11,6 +11,7 @@ import 'fireworks.dart';
 import 'folder_choice.dart';
 import 'layout.dart';
 import 'merge_preview_page.dart';
+import 'remote_sync_view.dart';
 import 'storage.dart';
 import 'syncing_devices.dart';
 
@@ -231,12 +232,31 @@ class _MultiSyncPageState extends State<MultiSyncPage> {
           e.state == LevelState.skipped ||
           (e.pending?.isEmpty ?? true) && e.state != LevelState.failed);
 
+  /// Every device in the run, told that it is in it, so each shows the same
+  /// circuit of squares this one does - from the tap to the end of the run.
+  late final SyncAnnouncements _announcements = SyncAnnouncements(
+    self: widget.self,
+    participants: [widget.self, ...widget.devices],
+  );
+
+  Future<void> _announce() =>
+      _announcements.tellAll(widget.devices, widget.trust);
+
   @override
   void initState() {
     super.initState();
     final shared = widget.folders.folders;
     if (shared.isNotEmpty) _folder = shared.first.name;
-    if (widget.gather) _gather();
+    if (widget.gather) {
+      _announce();
+      _gather();
+    }
+  }
+
+  @override
+  void dispose() {
+    unawaited(_announcements.end());
+    super.dispose();
   }
 
   /// Asks every device what folders it has and how much is in them, and counts
@@ -374,6 +394,7 @@ class _MultiSyncPageState extends State<MultiSyncPage> {
         // the same answer the two-device sync gives to the same question.
         if (_autoRun && _allSame) _leaving = true;
       });
+      if (_leaving) unawaited(_announcements.end());
     }
   }
 
@@ -601,6 +622,7 @@ class _MultiSyncPageState extends State<MultiSyncPage> {
       _cancelled = false;
       _preferLocal = null;
     });
+    await _announce();
 
     // A device whose copy won a conflict has to be synced before the rest:
     // this device is the meeting point, so the winning copy has to arrive here
@@ -636,16 +658,18 @@ class _MultiSyncPageState extends State<MultiSyncPage> {
     // the next device in the round is about to merge against.
     await pruneBaseStore(root, await BaseManifests.forFolder(folder));
 
+    final worked = _entries.values.every((e) => e.state != LevelState.failed);
     if (mounted) {
-      final worked = _entries.values.every((e) => e.state != LevelState.failed);
       setState(() {
         _running = false;
         _finished = true;
         // Several devices that disagreed now hold the same thing, and somebody
-        // waited through a network round of it. Worth a moment.
+        // waited through a network round of it. Worth a moment - on every one
+        // of them.
         _celebrating = worked && !_cancelled;
       });
     }
+    unawaited(_announcements.end(succeeded: worked && !_cancelled));
   }
 
   /// Makes sure one device has a place for the folder, asking it to choose one

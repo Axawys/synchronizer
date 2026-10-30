@@ -4,6 +4,7 @@ import 'dart:io';
 import 'connection.dart';
 import 'device_info.dart';
 import 'pairing.dart';
+import 'remote_sync.dart';
 import 'session.dart';
 import 'trust.dart';
 
@@ -59,6 +60,12 @@ class PeerServer {
   /// by putting a folder chooser in front of the user.
   Stream<FolderRequest> get folderRequests => _folderRequests.stream;
 
+  final _remoteSyncs = StreamController<RemoteSync>.broadcast();
+
+  /// Syncs another device has started that this one is part of, so the screen
+  /// can show them here too and not only on the device that was tapped.
+  Stream<RemoteSync> get remoteSyncs => _remoteSyncs.stream;
+
   /// The port actually bound. Differs from [port] only when 0 was requested to
   /// get an ephemeral port (used in tests).
   int get boundPort => _server?.port ?? port;
@@ -97,6 +104,7 @@ class PeerServer {
             trust: trust,
             directories: directories,
             onFolderRequest: _folderRequests.add,
+            onRemoteSync: _remoteSyncs.add,
             locks: _locks,
             windowsNames: windowsNames,
           );
@@ -113,5 +121,6 @@ class PeerServer {
     _server = null;
     if (!_pairingRequests.isClosed) await _pairingRequests.close();
     if (!_folderRequests.isClosed) await _folderRequests.close();
+    if (!_remoteSyncs.isClosed) await _remoteSyncs.close();
   }
 }

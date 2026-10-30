@@ -23,6 +23,7 @@ export 'src/qr_payload.dart';
 export 'src/pull.dart';
 export 'src/push.dart';
 export 'src/reconcile.dart';
+export 'src/remote_sync.dart';
 export 'src/server.dart';
 export 'src/session.dart';
 export 'src/trust.dart';

@@ -20,6 +20,7 @@ export 'src/merge_preview_page.dart';
 export 'src/multi_sync_page.dart';
 export 'src/prefs_trust_store.dart';
 export 'src/qr_pairing.dart';
+export 'src/remote_sync_view.dart';
 export 'src/rename_dialog.dart';
 export 'src/rolling_circuit.dart';
 export 'src/rolling_square.dart';

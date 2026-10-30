@@ -15,6 +15,7 @@ import 'folder_choice.dart';
 import 'layout.dart';
 import 'multi_sync_page.dart';
 import 'pairing_dialogs.dart';
+import 'remote_sync_view.dart';
 import 'rename_dialog.dart';
 import 'rolling_square.dart';
 import 'qr_pairing.dart';
@@ -354,6 +355,7 @@ class _DevicesPageState extends State<DevicesPage> {
   StreamSubscription<List<DeviceInfo>>? _peerUpdates;
   StreamSubscription<IncomingPairing>? _incomingRequests;
   StreamSubscription<FolderRequest>? _folderRequests;
+  StreamSubscription<RemoteSync>? _remoteSyncs;
 
   /// Watches what the shell's networking reports. Subscribed once: both
   /// streams outlive a failed start, and listening twice would double every
@@ -381,6 +383,9 @@ class _DevicesPageState extends State<DevicesPage> {
     // person here can say where it goes, so the question surfaces here.
     _folderRequests ??=
         _pairingServer.folderRequests.listen(_onFolderRequest);
+    // Another device has started a sync this one is part of. It plays here as
+    // it plays there: the folder being read and written is this one's too.
+    _remoteSyncs ??= _pairingServer.remoteSyncs.listen(_onRemoteSync);
   }
 
   /// Retry after the network could not be opened, from the button the failure
@@ -459,6 +464,7 @@ class _DevicesPageState extends State<DevicesPage> {
     _peerUpdates?.cancel();
     _incomingRequests?.cancel();
     _folderRequests?.cancel();
+    _remoteSyncs?.cancel();
     widget.folders.removeListener(_measureSelf);
     widget.networkFailed?.removeListener(_onNetworkStatus);
     // The networking itself belongs to the shell and outlives this screen.
@@ -686,6 +692,36 @@ class _DevicesPageState extends State<DevicesPage> {
     ));
   }
 
+  /// Syncs other devices are running with this one, oldest first. The first
+  /// is the one on screen; the others wait their turn behind it, which with
+  /// one device in charge of each run is rarely more than none.
+  final List<RemoteSync> _remote = [];
+
+  void _onRemoteSync(RemoteSync sync) {
+    if (!mounted || sync.isOver) return;
+    setState(() => _remote.add(sync));
+    sync.ended.then((_) {
+      // The one on screen unfolds first and says when it has; the ones behind
+      // it have nothing on screen to take down.
+      if (!mounted || _remote.isEmpty || identical(_remote.first, sync)) {
+        return;
+      }
+      setState(() => _remote.remove(sync));
+    });
+  }
+
+  /// Someone else's run is over here: back to the list, with the numbers on it
+  /// worth doubting, as after a run of this device's own.
+  Future<void> _endRemote(RemoteSync sync) async {
+    if (!mounted || !_remote.contains(sync)) return;
+    setState(() => _remote.remove(sync));
+    for (final device in sync.participants) {
+      _forgetFolders(device.id);
+    }
+    await _measureSelf();
+    await _refreshTrusted();
+  }
+
   /// Whether the devices present are being brought into line, here on the
   /// list. Levelling several devices is the same request as syncing with one -
   /// "bring these into line" - and it opens no more rooms than that one does.
@@ -794,22 +830,28 @@ class _DevicesPageState extends State<DevicesPage> {
         duration: const Duration(milliseconds: 250),
         child: _levelling
             ? _levellingBody()
-            : _syncingWith == null
-                ? _deviceList()
-                : _syncing(_syncingWith!),
+            : _syncingWith != null
+                ? _syncing(_syncingWith!)
+                : _remote.isNotEmpty
+                    ? _remoteSyncing(_remote.first)
+                    : _deviceList(),
       ),
     );
 
     // A run on this screen is what the back gesture is for while it lasts: it
     // is the thing the user is in, even though it opened no room.
     return PopScope(
-      canPop: _syncingWith == null && !_levelling,
+      canPop: _syncingWith == null && !_levelling && _remote.isEmpty,
       onPopInvokedWithResult: (didPop, _) {
         if (didPop) return;
         if (_levelling) {
           _endLevelling();
-        } else {
+        } else if (_syncingWith != null) {
           _endSync();
+        } else if (_remote.isNotEmpty) {
+          // Only the picture goes. The run is the other device's, and it
+          // carries on there.
+          _endRemote(_remote.first);
         }
       },
       child: screen,
@@ -826,6 +868,17 @@ class _DevicesPageState extends State<DevicesPage> {
       folders: widget.folders,
       embedded: true,
       onDone: _endLevelling,
+    );
+  }
+
+  /// Someone else's run, in the place the list was, the way this device's own
+  /// would be.
+  Widget _remoteSyncing(RemoteSync sync) {
+    return RemoteSyncing(
+      key: ObjectKey(sync),
+      self: widget.self,
+      sync: sync,
+      onDone: () => _endRemote(sync),
     );
   }
 

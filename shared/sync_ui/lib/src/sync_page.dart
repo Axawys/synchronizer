@@ -10,6 +10,7 @@ import 'fireworks.dart';
 import 'folder_choice.dart';
 import 'layout.dart';
 import 'merge_preview_page.dart';
+import 'remote_sync_view.dart';
 import 'storage.dart';
 import 'syncing_devices.dart';
 
@@ -137,6 +138,15 @@ class _SyncPageState extends State<SyncPage> {
   /// rather than take on faith.
   final Map<String, FolderSize> _localSize = {};
 
+  /// The other device, told that it is being synced with, so it shows the
+  /// same two squares this one does instead of sitting there as a list.
+  late final SyncAnnouncements _announcements = SyncAnnouncements(
+    self: widget.self,
+    participants: [widget.self, widget.device],
+  );
+
+  void _announce() => _announcements.tell(_device, widget.trusted);
+
   void _report(SyncProgress progress) {
     if (mounted) setState(() => _progress = progress);
   }
@@ -250,6 +260,9 @@ class _SyncPageState extends State<SyncPage> {
         _dirs = dirs;
         _connecting = false;
       });
+      // A tap is a sync from here on, so the other device hears of it now -
+      // as close to when the squares start folding here as can be managed.
+      if (widget.autoSync) _announce();
       await _loadTargets();
       await _autoStart();
     } on SyncCancelled {
@@ -292,6 +305,7 @@ class _SyncPageState extends State<SyncPage> {
     if (!widget.autoSync || _autoSynced || !mounted) return;
 
     if (_dirs.isEmpty) {
+      unawaited(_announcements.end());
       // Nothing on the other side to sync with. That is one sentence, and it
       // does not need a screen of its own to be read on.
       if (widget.embedded) {
@@ -307,7 +321,9 @@ class _SyncPageState extends State<SyncPage> {
     final folder = _dirs.length == 1 ? _dirs.single : null;
     if (folder == null || folder.missing || _targets[folder.name] == null) {
       // Something to decide - which folder, or where to put one - and no room
-      // to decide it here. The host opens a screen where it can be asked.
+      // to decide it here. The host opens a screen where it can be asked, and
+      // the sync starts again from there once it has been.
+      unawaited(_announcements.end());
       if (widget.embedded) widget.onNeedsChoice?.call();
       return;
     }
@@ -323,6 +339,7 @@ class _SyncPageState extends State<SyncPage> {
   @override
   void dispose() {
     _cancelConnecting();
+    unawaited(_announcements.end());
     _presence?.cancel();
     _client?.close();
     super.dispose();
@@ -393,9 +410,13 @@ class _SyncPageState extends State<SyncPage> {
       _workingOn = name;
       _progress = const SyncProgress(SyncPhase.asking);
     });
+    _announce();
     try {
       await _runSyncFor(name, client, root, l10n);
     } finally {
+      // Over, however it ended: the other device goes back to its list as
+      // this one does - with fireworks, if this one has them.
+      unawaited(_announcements.end(succeeded: _celebrating));
       if (mounted) {
         setState(() {
           _workingOn = null;

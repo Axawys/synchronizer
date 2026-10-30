@@ -187,6 +187,58 @@ void main() {
     });
   });
 
+  testWidgets('the device tapped is told about the sync, and about its end',
+      (tester) async {
+    await tester.runAsync(() async {
+      await openList(tester, {'Tablet': {'Obsidian': there.path}});
+      final heard = <RemoteSync>[];
+      final sub = servers.single.remoteSyncs.listen(heard.add);
+      addTearDown(sub.cancel);
+
+      await tester.tap(find.text('Tablet'));
+      await tester.pump();
+      for (var i = 0; i < 20 && heard.isEmpty; i++) {
+        await Future<void>.delayed(const Duration(milliseconds: 25));
+        await tester.pump(const Duration(milliseconds: 25));
+      }
+
+      // So it can play the same two squares, with the same two devices in it.
+      expect(heard, hasLength(1));
+      expect(heard.single.from.id, 'self');
+      expect(heard.single.participants.map((d) => d.id), ['self', 'Tablet']);
+
+      // Nothing to do, so it is over here - and there, at the same time.
+      await settle(tester);
+      expect(find.byType(DeviceCard), findsOneWidget);
+      await heard.single.ended.timeout(const Duration(seconds: 5));
+    });
+  });
+
+  testWidgets('every device in a levelling run is told it is in it',
+      (tester) async {
+    await tester.runAsync(() async {
+      await openList(tester, {
+        'Tablet': {'Obsidian': there.path},
+        'Laptop': {'Obsidian': alsoThere.path},
+      });
+      final heard = <String, RemoteSync>{};
+      for (final server in servers) {
+        server.remoteSyncs.listen((sync) => heard[server.self.id] = sync);
+      }
+
+      await tester.tap(find.text('Tablet'));
+      await settle(tester, rounds: 60);
+
+      // Each of them sees all three: the run is one circuit, not two pairs.
+      expect(heard.keys, unorderedEquals(['Tablet', 'Laptop']));
+      for (final sync in heard.values) {
+        expect(sync.participants.map((d) => d.id),
+            unorderedEquals(['self', 'Tablet', 'Laptop']));
+        await sync.ended.timeout(const Duration(seconds: 5));
+      }
+    });
+  });
+
   testWidgets('backing out of the changes lands on the list', (tester) async {
     File('${there.path}/note.md').writeAsStringSync('written on the tablet\n');
 
@@ -282,12 +334,21 @@ void main() {
 
     await tester.runAsync(() async {
       await openList(tester, {'Tablet': {'Obsidian': there.path}});
+      final heard = <RemoteSync>[];
+      final sub = servers.single.remoteSyncs.listen(heard.add);
+      addTearDown(sub.cancel);
+
       await tester.tap(find.text('Tablet'));
       await settle(tester);
 
       expect(find.byType(MergePreviewPage), findsOneWidget);
       await tester.tap(find.byType(FloatingActionButton));
       await settle(tester, rounds: 30);
+
+      // The tablet is told it went through, so it has its fireworks too.
+      expect(heard, hasLength(1));
+      await heard.single.ended.timeout(const Duration(seconds: 5));
+      expect(heard.single.succeeded, isTrue);
 
       // Two devices that disagreed now hold the same thing, and somebody
       // waited through a network round of it. Three devices get fireworks for

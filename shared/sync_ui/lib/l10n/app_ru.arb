@@ -116,6 +116,8 @@
 
   "connectCancel": "Отменить",
   "connectingTo": "Подключаюсь к {name}…",
+  "remoteSyncWith": "Синхронизация с {name}…",
+  "remoteLevelBy": "{name} сводит устройства…",
   "couldNotConnect": "Не удалось подключиться:\n{error}",
   "notSharingFolders": "Это устройство пока не предоставляет ни одной папки.",
   "syncIntoThisFolder": "Синхронизировать «{name}» в эту папку",

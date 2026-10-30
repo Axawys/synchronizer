@@ -11,6 +11,7 @@ import 'connection.dart';
 import 'device_info.dart';
 import 'frame.dart';
 import 'pairing.dart' show generateNonce;
+import 'remote_sync.dart';
 import 'trust.dart';
 
 /// Message types for an established sync session (after pairing).
@@ -34,6 +35,11 @@ abstract final class SessionType {
   static const putFile = 'file.put';
   static const deleteFile = 'file.delete';
   static const ack = 'ok';
+
+  // Telling a device it is taking part in a sync another device is running.
+  static const syncBegin = 'sync.begin';
+  static const syncAlive = 'sync.alive';
+  static const syncEnd = 'sync.end';
 
   static const error = 'error';
 }
@@ -301,6 +307,39 @@ class SyncClient {
     await _expectAck('file delete');
   }
 
+  /// Tells the peer it is taking part in a sync, with [participants] being
+  /// everyone in it. False from a device too old to know what that means,
+  /// which is not a failure: it simply will not show anything.
+  Future<bool> announceSync(List<DeviceInfo> participants) async {
+    _conn.send({
+      'type': SessionType.syncBegin,
+      'participants': [for (final d in participants) d.toAnnouncement()],
+    });
+    final reply = await _next(_frames, _conn);
+    return reply.type == SessionType.ack;
+  }
+
+  /// Proof that the sync this connection announced is still under way. Not
+  /// answered, so it can go out between nothing else.
+  void keepAlive() {
+    try {
+      _conn.send({'type': SessionType.syncAlive});
+    } catch (_) {
+      // The link is gone, and the far end will notice that on its own.
+    }
+  }
+
+  /// The sync this connection announced is over, and how it went: whether
+  /// everything that was going to move moved. Not answered - the connection
+  /// closes straight after it.
+  void endSync({required bool succeeded}) {
+    try {
+      _conn.send({'type': SessionType.syncEnd, 'succeeded': succeeded});
+    } catch (_) {
+      // The link is gone; the far end will see the sync end without a result.
+    }
+  }
+
   Future<void> _expectAck(String what) async {
     final reply = await _next(_frames, _conn);
     if (reply.type == SessionType.error) {
@@ -327,6 +366,7 @@ Future<void> handleSession(
   required TrustStore trust,
   required DirectorySource directories,
   void Function(FolderRequest)? onFolderRequest,
+  void Function(RemoteSync)? onRemoteSync,
   FolderLocks? locks,
   bool windowsNames = false,
 }) async {
@@ -365,9 +405,19 @@ Future<void> handleSession(
   // Folders this session took, so they are given back however it ends.
   final held = <String>{};
 
+  // A sync this session said is under way, and the watch kept on it. A device
+  // that walked out of range does not close its connection, so the far end
+  // keeps proving it is there; once it stops, the sync is over here too.
+  RemoteSync? announced;
+  Timer? silence;
+
   try {
     while (await frames.moveNext()) {
       final request = frames.current;
+      if (announced != null) {
+        silence?.cancel();
+        silence = Timer(kSilenceTimeout, conn.close);
+      }
 
       // Anything that names a folder claims it for this session: a sync is a
       // conversation about one folder, and two at once are two half-syncs.
@@ -397,6 +447,22 @@ Future<void> handleSession(
           await _servePut(conn, directories, request, windowsNames);
         case SessionType.deleteFile:
           await _serveDelete(conn, directories, request, windowsNames);
+        case SessionType.syncBegin:
+          conn.send({'type': SessionType.ack});
+          if (announced == null) {
+            announced = RemoteSync.fromHeader(
+              request.header,
+              from: trusted,
+              address: conn.remoteAddress,
+            );
+            silence = Timer(kSilenceTimeout, conn.close);
+            onRemoteSync?.call(announced);
+          }
+        case SessionType.syncAlive:
+          // Proof of life, and nothing to answer.
+          break;
+        case SessionType.syncEnd:
+          announced?.end(succeeded: request.header['succeeded'] == true);
         default:
           conn.send({'type': SessionType.error, 'message': 'unknown request'});
       }
@@ -405,6 +471,8 @@ Future<void> handleSession(
     for (final folder in held) {
       locks?.release(folder, trusted.id);
     }
+    silence?.cancel();
+    announced?.end();
   }
   await conn.close();
 }
