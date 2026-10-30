@@ -432,6 +432,14 @@ class _SyncPageState extends State<SyncPage> {
       return;
     }
 
+    // Said before anything else: those files stay out of every sync with this
+    // device until they are renamed, and the sizes shown next would otherwise
+    // disagree with no reason given.
+    if (merge.skipped.isNotEmpty) {
+      _toast(l10n.skippedWindowsNames(
+          merge.skipped.length, merge.skipped.first));
+    }
+
     if (merge.isEmpty) {
       // Not just "nothing to do": how many files each side was found to have.
       // A folder full on one device and empty on the other, reported as in

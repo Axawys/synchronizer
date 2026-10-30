@@ -491,6 +491,14 @@ class _MultiSyncPageState extends State<MultiSyncPage> {
         entry.pending = merge;
         entry.state = LevelState.waiting;
       });
+      // Those files sit out every sync with this device until renamed, which
+      // is worth saying once, here, rather than leaving the sizes to disagree.
+      if (merge.skipped.isNotEmpty && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(AppLocalizations.of(context).skippedWindowsNames(
+              merge.skipped.length, merge.skipped.first)),
+        ));
+      }
     } catch (e) {
       setState(() {
         entry.state = LevelState.failed;

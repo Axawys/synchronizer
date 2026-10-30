@@ -140,11 +140,18 @@ String _mac(String secret, String data) =>
 /// Client side of a sync session: authenticate against a paired device, then
 /// browse and pull its shared directories.
 class SyncClient {
-  SyncClient._(this._conn, this._frames, this.peer);
+  SyncClient._(this._conn, this._frames, this.peer,
+      {this.peerKeepsWindowsNames = false});
 
   final PeerConnection _conn;
   final StreamIterator<Frame> _frames;
   final DeviceInfo peer;
+
+  /// The peer keeps its files on Windows and cannot hold every name this
+  /// device can. Said by the peer itself when the session opens, so it holds
+  /// whatever the trust store remembers about its platform; a sync with it
+  /// leaves those names out on both sides (see [windowsUnsafePaths]).
+  final bool peerKeepsWindowsNames;
 
   /// Connects to [host]:[port], authenticates as [self] using the shared secret
   /// from [trusted], and verifies the server proves the same secret back.
@@ -195,6 +202,7 @@ class SyncClient {
           port: port,
           address: host,
         ),
+        peerKeepsWindowsNames: reply.header['names'] == 'windows',
       );
     } catch (_) {
       await closeConnection(conn, frames);
@@ -320,6 +328,7 @@ Future<void> handleSession(
   required DirectorySource directories,
   void Function(FolderRequest)? onFolderRequest,
   FolderLocks? locks,
+  bool windowsNames = false,
 }) async {
   final peerId = hello.header['deviceId'];
   final trusted = peerId is String ? await trust.get(peerId) : null;
@@ -347,6 +356,10 @@ Future<void> handleSession(
   conn.send({
     'type': SessionType.ok,
     'mac': _mac(trusted.secret, 'server:$clientNonce'),
+    // Tells the other device to leave out what this one cannot hold. A device
+    // too old to know the field ignores it, and the writes below refuse those
+    // names anyway.
+    if (windowsNames) 'names': 'windows',
   });
 
   // Folders this session took, so they are given back however it ends.
@@ -381,9 +394,9 @@ Future<void> handleSession(
         case SessionType.getFile:
           await _serveFile(conn, directories, request);
         case SessionType.putFile:
-          await _servePut(conn, directories, request);
+          await _servePut(conn, directories, request, windowsNames);
         case SessionType.deleteFile:
-          await _serveDelete(conn, directories, request);
+          await _serveDelete(conn, directories, request, windowsNames);
         default:
           conn.send({'type': SessionType.error, 'message': 'unknown request'});
       }
@@ -509,6 +522,7 @@ Future<void> _servePut(
   PeerConnection conn,
   DirectorySource directories,
   Frame request,
+  bool windowsNames,
 ) async {
   final root = directories.pathOf(request.header['name']?.toString() ?? '');
   final rel = request.header['path']?.toString() ?? '';
@@ -519,6 +533,12 @@ Future<void> _servePut(
   final resolved = _resolveWithin(root, rel);
   if (resolved == null) {
     conn.send({'type': SessionType.error, 'message': 'invalid path'});
+    return;
+  }
+
+  final misnamed = windowsNames ? _windowsRefusal(root, rel, resolved) : null;
+  if (misnamed != null) {
+    conn.send({'type': SessionType.error, 'message': misnamed});
     return;
   }
 
@@ -582,6 +602,7 @@ Future<void> _serveDelete(
   PeerConnection conn,
   DirectorySource directories,
   Frame request,
+  bool windowsNames,
 ) async {
   final root = directories.pathOf(request.header['name']?.toString() ?? '');
   final rel = request.header['path']?.toString() ?? '';
@@ -592,6 +613,12 @@ Future<void> _serveDelete(
   final resolved = _resolveWithin(root, rel);
   if (resolved == null) {
     conn.send({'type': SessionType.error, 'message': 'invalid path'});
+    return;
+  }
+
+  final misnamed = windowsNames ? _windowsRefusal(root, rel, resolved) : null;
+  if (misnamed != null) {
+    conn.send({'type': SessionType.error, 'message': misnamed});
     return;
   }
 
@@ -617,6 +644,45 @@ String? _resolveWithin(String root, String rel) {
   final joined = p.normalize(p.join(rootNorm, rel));
   if (joined != rootNorm && !p.isWithin(rootNorm, joined)) return null;
   return joined;
+}
+
+/// Why this device, keeping its files on Windows, will not write or delete
+/// [rel], or null to go ahead.
+///
+/// A device that knows the rules never asks: it was told about them when the
+/// session opened and left these names out. This is for one that does not - an
+/// older version - and for whatever slips past it, because Windows itself
+/// refuses almost none of this and does something else instead.
+String? _windowsRefusal(String root, String rel, String resolved) {
+  if (!isWindowsSafe(rel)) return 'that name cannot be kept on Windows';
+  if (_spelledDifferently(root, resolved)) {
+    return 'a file or folder differing only in letter case is already there';
+  }
+  return null;
+}
+
+/// Whether the part of [resolved] that already exists is spelled differently
+/// on disk. `note.md` written where `Note.md` is lands in `Note.md`, and so does
+/// `notes/a.md` under `Notes`: a case-insensitive file system answers to either
+/// spelling and keeps the first.
+bool _spelledDifferently(String root, String resolved) {
+  final rootNorm = p.normalize(p.absolute(root));
+  var existing = resolved;
+  while (FileSystemEntity.typeSync(existing, followLinks: false) ==
+      FileSystemEntityType.notFound) {
+    existing = p.dirname(existing);
+    if (!p.isWithin(rootNorm, existing)) return false; // nothing below root yet
+  }
+  try {
+    // Resolving goes through the file system, which answers with the spelling
+    // it actually holds. Only the part below the root is compared, so a root
+    // reached through a link or typed in another case does not count.
+    final actual = p.relative(File(existing).resolveSymbolicLinksSync(),
+        from: Directory(rootNorm).resolveSymbolicLinksSync());
+    return actual != p.relative(existing, from: rootNorm);
+  } on FileSystemException {
+    return false;
+  }
 }
 
 String _nonce() {

@@ -22,6 +22,14 @@ class Manifest {
 
   int get length => entries.length;
 
+  /// This manifest with [paths] left out.
+  Manifest without(Set<String> paths) => paths.isEmpty
+      ? this
+      : Manifest({
+          for (final entry in entries.entries)
+            if (!paths.contains(entry.key)) entry.key: entry.value,
+        });
+
   /// Walks [root] and builds a manifest of every regular file below it.
   ///
   /// Anything matched by [ignore] (checked against the relative, slash-joined

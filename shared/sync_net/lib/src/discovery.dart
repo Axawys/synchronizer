@@ -332,7 +332,9 @@ class DiscoveryService {
       InternetAddress.anyIPv4,
       config.port,
       reuseAddress: true,
-      reusePort: true,
+      // Windows has no SO_REUSEPORT and complains on every bind when asked; its
+      // SO_REUSEADDR already lets two listeners share the port.
+      reusePort: !Platform.isWindows,
     );
 
     socket.multicastLoopback = true;

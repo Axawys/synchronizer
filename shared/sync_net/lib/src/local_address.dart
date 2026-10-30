@@ -110,9 +110,25 @@ Future<bool> vpnIsUp() async {
 /// without native code. The names are the ones Linux and Android use:
 /// `rndis0`/`usb0`/`enp0s20u2` for tethering, `ap0`/`swlan0`/`wlan1` for a
 /// hosted hotspot, `rmnet_data0`/`ccmni0` for mobile data.
+///
+/// Windows names its adapters for people instead - `Wi-Fi`, `Ethernet 2`,
+/// `Local Area Connection* 10` - and in the language of the system. Those say
+/// less: a phone tethered by cable is just another `Ethernet`, so on Windows a
+/// cable ranks as a wired network.
 LinkKind linkKindOf(String interfaceName) {
   final name = interfaceName.toLowerCase();
   bool named(List<String> prefixes) => prefixes.any(name.startsWith);
+
+  // The asterisk is how Windows marks a virtual adapter, and the virtual one
+  // with this name is the one its Mobile hotspot runs on.
+  if (named(const ['local area connection*', 'подключение по локальной сети*'])) {
+    return LinkKind.hotspot;
+  }
+  if (named(const ['wi-fi', 'wireless', 'беспроводная сеть'])) {
+    return LinkKind.wifi;
+  }
+  // Hyper-V and WSL switches: a network inside this machine, not a way out.
+  if (name.startsWith('vethernet')) return LinkKind.other;
 
   if (named(const ['usb', 'rndis'])) return LinkKind.usb;
   // A wired name ending in a `u<n>` segment, or starting `enx`, is a USB

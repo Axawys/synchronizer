@@ -2,12 +2,14 @@ import 'dart:io';
 
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
+import 'package:path/path.dart' as p;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:sync_net/sync_net.dart';
 
 import '../l10n/gen/app_localizations.dart';
 
 import 'folder_picker_page.dart';
+import 'layout.dart';
 import 'storage.dart';
 
 /// Asks the user for a folder, the way this platform does it.
@@ -236,12 +238,14 @@ Future<String?> chooseSyncFolder(BuildContext context) async {
 /// nothing: it is the answer people accept without looking, and it syncs
 /// nothing while looking exactly like it worked.
 Future<String?> suggestedVault() async {
-  final home = Platform.isAndroid
-      ? '/storage/emulated/0'
-      : Platform.environment['HOME'];
+  final home = Platform.isAndroid ? '/storage/emulated/0' : userHome();
   if (home == null || home.isEmpty) return null;
 
-  for (final candidate in ['$home/Documents/Obsidian', '$home/Obsidian']) {
+  final candidates = [
+    for (final documents in _documentFolders(home)) p.join(documents, 'Obsidian'),
+    p.join(home, 'Obsidian'),
+  ];
+  for (final candidate in candidates) {
     try {
       final directory = Directory(candidate);
       if (!directory.existsSync()) continue;
@@ -257,9 +261,27 @@ Future<String?> suggestedVault() async {
 /// Where the browser should open when there is nothing to suggest: the
 /// documents folder if there is one, the top of storage otherwise.
 Future<String> browseRoot() async {
-  final home =
-      Platform.isAndroid ? '/storage/emulated/0' : Platform.environment['HOME'];
-  if (home == null || home.isEmpty) return '/';
-  final documents = Directory('$home/Documents');
-  return documents.existsSync() ? documents.path : home;
+  final home = Platform.isAndroid ? '/storage/emulated/0' : userHome();
+  if (home == null || home.isEmpty) return p.rootPrefix(Directory.current.path);
+  for (final documents in _documentFolders(home)) {
+    if (Directory(documents).existsSync()) return documents;
+  }
+  return home;
+}
+
+/// Where this user's documents may be, most likely first.
+///
+/// Windows moves the documents folder into OneDrive when OneDrive is set up to
+/// back it up, and there it may carry the system's language in its name. The
+/// environment says where OneDrive is; looking in both places is cheaper than
+/// asking the shell, and an absent folder is simply passed over.
+List<String> _documentFolders(String home) {
+  final oneDrive = Platform.isWindows ? Platform.environment['OneDrive'] : null;
+  return [
+    p.join(home, 'Documents'),
+    if (oneDrive != null && oneDrive.isNotEmpty) ...[
+      p.join(oneDrive, 'Documents'),
+      p.join(oneDrive, 'Документы'),
+    ],
+  ];
 }

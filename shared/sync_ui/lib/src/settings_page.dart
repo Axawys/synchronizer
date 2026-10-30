@@ -202,6 +202,10 @@ class _SettingsPageState extends State<SettingsPage> {
               onChanged: (value) async {
                 setState(() => _autostart = value);
                 await Autostart.setEnabled(value);
+                // What the system now says, so a switch that did not take
+                // does not sit there claiming it did.
+                final actual = await Autostart.isEnabled();
+                if (mounted) setState(() => _autostart = actual);
               },
             ),
           ],

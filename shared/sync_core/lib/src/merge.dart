@@ -1,5 +1,6 @@
 import 'file_entry.dart';
 import 'manifest.dart';
+import 'windows_names.dart';
 
 /// What should happen to one file when reconciling two devices.
 enum MergeKind {
@@ -35,9 +36,14 @@ class MergeItem {
 /// The outcome of a three-way comparison: every file that differs between the
 /// two devices, each classified as a one-way change or a conflict.
 class MergeResult {
-  MergeResult(this.items);
+  MergeResult(this.items, {this.skipped = const []});
 
   final List<MergeItem> items;
+
+  /// Files on either device that this sync leaves alone because Windows could
+  /// not hold their names (see [windowsUnsafePaths]). Not part of [items]:
+  /// nothing happens to them on either side, and the user should be told why.
+  final List<String> skipped;
 
   bool get isEmpty => items.isEmpty;
   int get length => items.length;
@@ -62,7 +68,36 @@ class MergeResult {
 ///
 /// Files identical on both sides are left out, even if their timestamps differ,
 /// because identity is the content hash.
-MergeResult threeWayMerge(Manifest base, Manifest local, Manifest remote) {
+///
+/// [windowsNames] is set when either device is Windows. Paths it cannot hold
+/// are then taken out of all three manifests before anything is compared, and
+/// reported in [MergeResult.skipped] instead.
+MergeResult threeWayMerge(
+  Manifest base,
+  Manifest local,
+  Manifest remote, {
+  bool windowsNames = false,
+}) {
+  if (windowsNames) {
+    final unsafe = windowsUnsafePaths([base, local, remote]);
+    if (unsafe.isNotEmpty) {
+      final merge = threeWayMerge(
+        base.without(unsafe),
+        local.without(unsafe),
+        remote.without(unsafe),
+      );
+      // Only what is actually there: a path the last sync remembers and
+      // neither device still has is nothing anyone is missing.
+      final skipped = unsafe
+          .where((path) =>
+              local.entries.containsKey(path) ||
+              remote.entries.containsKey(path))
+          .toList()
+        ..sort();
+      return MergeResult(merge.items, skipped: skipped);
+    }
+  }
+
   final paths = <String>{
     ...base.entries.keys,
     ...local.entries.keys,

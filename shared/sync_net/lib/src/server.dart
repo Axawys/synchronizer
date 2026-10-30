@@ -19,7 +19,9 @@ class PeerServer {
     this.trust, {
     this.port = 47800,
     DirectorySource? directories,
-  }) : directories = directories ?? MapDirectorySource(const {});
+    bool? windowsNames,
+  })  : directories = directories ?? MapDirectorySource(const {}),
+        windowsNames = windowsNames ?? Platform.isWindows;
 
   /// How this device introduces itself in a handshake. Not final: the user can
   /// rename the device, and the next device to pair should hear the new name.
@@ -31,6 +33,11 @@ class PeerServer {
   /// Directories offered to authenticated peers. Empty until the app shares
   /// some, which is fine: pairing still works, listing just returns nothing.
   final DirectorySource directories;
+
+  /// The shared folders live on a Windows file system, so names it cannot hold
+  /// are refused and peers are told to leave them out. True on Windows; tests
+  /// set it to play a Windows device anywhere.
+  final bool windowsNames;
 
   ServerSocket? _server;
   final _pairingRequests = StreamController<IncomingPairing>.broadcast();
@@ -91,6 +98,7 @@ class PeerServer {
             directories: directories,
             onFolderRequest: _folderRequests.add,
             locks: _locks,
+            windowsNames: windowsNames,
           );
         default:
           await closeConnection(conn, frames);

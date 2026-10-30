@@ -539,7 +539,7 @@ Future<RawDatagramSocket> _openProbe(DiscoveryConfig config) async {
     InternetAddress.anyIPv4,
     config.port,
     reuseAddress: true,
-    reusePort: true,
+    reusePort: !Platform.isWindows,
   );
   socket.multicastLoopback = true;
   socket.broadcastEnabled = true;

@@ -201,6 +201,21 @@ void main() {
           '/homework/notes');
     });
 
+    test('reads a Windows path the same way, backslashes and all', () {
+      expect(
+          prettyPath(r'C:\Users\Me\Documents\Obsidian', home: r'c:\users\me'),
+          r'~\Documents\Obsidian');
+      expect(prettyPath(r'C:\Users\Someone\Notes', home: '/home/me'),
+          r'~\Notes');
+      expect(prettyPath(r'D:\Vaults\notes', home: r'C:\Users\Me'),
+          r'D:\Vaults\notes');
+      expect(
+        prettyPath(r'D:\very\deeply\nested\place\for\things\Obsidian\vault',
+            home: r'C:\Users\Me'),
+        r'…\things\Obsidian\vault',
+      );
+    });
+
     test('drops the prefix every path on a phone starts with', () {
       expect(prettyPath('/storage/emulated/0/Obsidian/vault'), '/Obsidian/vault');
     });

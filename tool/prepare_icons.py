@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Turns assets/icon.png into the two images the launcher icons are built from.
+"""Turns assets/icon.png into the two images the launcher icons are built from,
+and into the Windows app icon.
 
 Run after changing the icon, then `dart run flutter_launcher_icons` in android/.
+The Windows icon is written straight into the runner and needs nothing further.
 
 Two things make this more than a resize:
 
@@ -16,13 +18,21 @@ the 108 canvas and correct on the phone, because the phone only ever shows 72.
 
 The artwork is also black on nothing at all. A transparent icon disappears into
 a dark launcher background, so the adaptive background layer is a solid colour
-and the legacy icon is flattened onto the same one.
+and the legacy icon is flattened onto the same one. Windows shows its icon
+unmasked, on a taskbar that is often dark, which is the legacy icon's situation
+exactly - so it gets the same picture, at the sizes Windows asks for.
 """
 
 from PIL import Image
 
 SOURCE = 'assets/icon.png'
 OUT_DIR = 'android/assets'
+WINDOWS_ICON = 'windows/windows/runner/resources/app_icon.ico'
+
+# What Explorer, the taskbar and the title bar pick from, up to the largest
+# Explorer ever shows.
+WINDOWS_SIZES = [(16, 16), (20, 20), (24, 24), (32, 32), (40, 40), (48, 48),
+                 (64, 64), (128, 128), (256, 256)]
 
 # 108dp at xxxhdpi. The source is 396px, so everything here only ever shrinks
 # the artwork - upscaling it would just smear the edges.
@@ -65,7 +75,10 @@ def main() -> None:
     legacy.alpha_composite(fitted(source, LEGACY_SCALE))
     legacy.save(f'{OUT_DIR}/icon_legacy.png')
 
-    print(f'wrote {OUT_DIR}/icon_foreground.png and {OUT_DIR}/icon_legacy.png')
+    legacy.save(WINDOWS_ICON, sizes=WINDOWS_SIZES)
+
+    print(f'wrote {OUT_DIR}/icon_foreground.png, {OUT_DIR}/icon_legacy.png '
+          f'and {WINDOWS_ICON}')
 
 
 if __name__ == '__main__':

@@ -180,6 +180,9 @@ class MissingRootException implements Exception {
 ///
 /// Throws [MissingRootException] if the folder is gone but [base] says it once
 /// had files: see that class for why this cannot be treated as a deletion.
+///
+/// When either device keeps its files on Windows, names Windows cannot hold
+/// are left out on both sides and listed in [MergeResult.skipped].
 Future<MergeResult> computeMerge(
   SyncClient client,
   String name,
@@ -200,7 +203,12 @@ Future<MergeResult> computeMerge(
       : Manifest(<String, FileEntry>{});
 
   onProgress?.call(const SyncProgress(SyncPhase.comparing));
-  return threeWayMerge(base, local, remote);
+  return threeWayMerge(
+    base,
+    local,
+    remote,
+    windowsNames: Platform.isWindows || client.peerKeepsWindowsNames,
+  );
 }
 
 /// A reasonable automatic resolution for a conflict: whichever side was
@@ -260,7 +268,15 @@ Future<MergeReport> applyMerge(
   var done = 0;
   final failures = <MergeFailure>[];
 
-  for (final r in resolved) {
+  // Deletions first. A rename that changes only letter case arrives as a
+  // deletion of one spelling and a write of the other, and on Windows both
+  // name the same file: written first, the new copy would be the one deleted.
+  final ordered = [
+    ...resolved.where(_isDeletion),
+    ...resolved.where((r) => !_isDeletion(r)),
+  ];
+
+  for (final r in ordered) {
     final item = r.item;
     try {
       final merged = r.content;
@@ -351,6 +367,9 @@ Future<SyncOutcome> runSync(
   await refreshBaseStore(localRoot, current);
   return SyncOutcome(report: report, newBase: current);
 }
+
+bool _isDeletion(ResolvedMerge r) =>
+    !r.isMerged && (r.toLocal ? r.item.remote == null : r.item.local == null);
 
 File _localFile(Directory root, String path) =>
     File(p.joinAll([root.path, ...p.posix.split(path)]));

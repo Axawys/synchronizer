@@ -2,7 +2,7 @@ import 'dart:math';
 
 /// Which kind of machine a peer is. Kept deliberately small; it only drives
 /// presentation (an icon, a label) and never behaviour.
-enum DevicePlatform { linux, android, unknown }
+enum DevicePlatform { linux, android, windows, unknown }
 
 DevicePlatform devicePlatformFromString(String value) {
   switch (value) {
@@ -10,6 +10,8 @@ DevicePlatform devicePlatformFromString(String value) {
       return DevicePlatform.linux;
     case 'android':
       return DevicePlatform.android;
+    case 'windows':
+      return DevicePlatform.windows;
     default:
       return DevicePlatform.unknown;
   }

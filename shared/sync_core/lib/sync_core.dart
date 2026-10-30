@@ -14,3 +14,4 @@ export 'src/base_store.dart';
 export 'src/merge.dart';
 export 'src/text_diff.dart';
 export 'src/text_merge.dart';
+export 'src/windows_names.dart';

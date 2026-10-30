@@ -21,6 +21,17 @@ void main() {
       expect(linkKindOf('nordlynx'), LinkKind.vpn);
     });
 
+    test('reads the names Windows gives its adapters', () {
+      expect(linkKindOf('Wi-Fi'), LinkKind.wifi);
+      expect(linkKindOf('Wi-Fi 2'), LinkKind.wifi);
+      expect(linkKindOf('Беспроводная сеть'), LinkKind.wifi);
+      expect(linkKindOf('Ethernet 2'), LinkKind.wired);
+      expect(linkKindOf('Local Area Connection* 10'), LinkKind.hotspot,
+          reason: 'the virtual adapter Mobile hotspot runs on');
+      expect(linkKindOf('Подключение по локальной сети* 2'), LinkKind.hotspot);
+      expect(linkKindOf('vEthernet (WSL)'), LinkKind.other);
+    });
+
     test('only a cable and a hotspot count as direct', () {
       expect(LinkKind.usb.isDirect, isTrue);
       expect(LinkKind.hotspot.isDirect, isTrue);

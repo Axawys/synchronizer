@@ -195,6 +195,7 @@ class Tag extends StatelessWidget {
 IconData deviceIcon(DevicePlatform platform) => switch (platform) {
       DevicePlatform.android => Icons.smartphone,
       DevicePlatform.linux => Icons.computer,
+      DevicePlatform.windows => Icons.desktop_windows,
       DevicePlatform.unknown => Icons.devices_other,
     };
 
@@ -212,6 +213,9 @@ IconData deviceIcon(DevicePlatform platform) => switch (platform) {
 /// `/home/axawys/Documents/Obsidian` read on a phone - matches no home here and
 /// would otherwise be shown in full, four segments of which two say only "a
 /// Linux machine, somebody's account".
+///
+/// A Windows path keeps its backslashes, and its home - `C:\Users\<somebody>` -
+/// is matched regardless of case, the way Windows itself matches it.
 String prettyPath(
   String path, {
   int keepSegments = 3,
@@ -219,6 +223,8 @@ String prettyPath(
   String? home,
 }) {
   var text = path;
+  final windows = text.contains(r'\');
+  final sep = windows ? r'\' : '/';
 
   const androidStorage = '/storage/emulated/0';
   if (text.startsWith(androidStorage)) {
@@ -226,8 +232,16 @@ String prettyPath(
     text = rest.isEmpty ? androidStorage : rest;
   } else {
     final userHome = home ?? _home;
-    if (userHome != null && userHome.isNotEmpty && text.startsWith(userHome)) {
+    final inHome = userHome != null &&
+        userHome.isNotEmpty &&
+        (windows
+            ? text.toLowerCase().startsWith(userHome.toLowerCase())
+            : text.startsWith(userHome));
+    if (inHome) {
       text = '~${text.substring(userHome.length)}';
+    } else if (windows) {
+      text = text.replaceFirst(
+          RegExp(r'^[a-z]:\\users\\[^\\]+(?=\\|$)', caseSensitive: false), '~');
     } else {
       // Any `/home/<somebody>`, whoever they are and whichever device said so.
       // The segment boundary matters: `/homework` is not a home.
@@ -237,19 +251,25 @@ String prettyPath(
 
   if (text.length <= softLimit) return text;
 
-  final segments = text.split('/').where((s) => s.isNotEmpty).toList();
+  final segments = text.split(sep).where((s) => s.isNotEmpty).toList();
   if (segments.length <= keepSegments) return text;
-  return '…/${segments.sublist(segments.length - keepSegments).join('/')}';
+  return '…$sep${segments.sublist(segments.length - keepSegments).join(sep)}';
 }
 
 String? get _home {
   try {
-    return Platform.environment['HOME'];
+    return userHome();
   } catch (_) {
     // No environment to read, as in a browser or a locked-down host.
     return null;
   }
 }
+
+/// This user's home folder: `HOME` everywhere but Windows, which keeps it in
+/// `USERPROFILE` and usually has no `HOME` at all.
+String? userHome() => Platform.isWindows
+    ? Platform.environment['USERPROFILE']
+    : Platform.environment['HOME'];
 
 /// A size a person can judge at a glance.
 ///
