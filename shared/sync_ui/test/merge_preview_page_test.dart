@@ -105,9 +105,11 @@ void main() {
 
     await show(tester, preview);
 
-    // Before anything else on the screen, and named as the thing that cannot
-    // be taken back.
-    expect(find.text('2 files will be deleted on Desktop'), findsOneWidget);
+    // Under the device they are deleted on, first in its list, and named as
+    // the thing that cannot be taken back.
+    expect(find.text('Going to Desktop'), findsOneWidget);
+    expect(find.text('−2'), findsOneWidget, reason: 'in the header');
+    expect(find.text('Deleted · 2'), findsOneWidget);
     expect(find.textContaining('deleted, not moved'), findsOneWidget);
 
     // And the rows themselves read as losses: same colour as the warning.
@@ -133,7 +135,8 @@ void main() {
 
     await show(tester, preview);
 
-    expect(find.textContaining('will be deleted'), findsNothing);
+    expect(find.textContaining('deleted, not moved'), findsNothing);
+    expect(find.textContaining('Deleted'), findsNothing);
   });
 
   testWidgets('shows the lines a file gains and loses', (tester) async {
@@ -156,8 +159,8 @@ void main() {
     await show(tester, preview);
 
     expect(find.text('note.md'), findsOneWidget);
-    expect(find.textContaining('+1'), findsOneWidget);
-    expect(find.textContaining('-1'), findsOneWidget);
+    expect(find.text('+1'), findsOneWidget);
+    expect(find.text('−1'), findsOneWidget);
 
     // The diff itself is behind the tile.
     await tester.tap(find.text('note.md'));
@@ -185,10 +188,210 @@ void main() {
 
     await show(tester, preview);
 
-    expect(find.text('vault'), findsOneWidget);
-    expect(find.textContaining('Created'), findsOneWidget);
-    expect(find.text('old'), findsOneWidget);
-    expect(find.textContaining('Removed'), findsOneWidget);
+    // Among the changes on the device they happen on: a folder that goes with
+    // what goes, one that appears with what is new.
+    expect(find.text('old/'), findsOneWidget);
+    expect(find.text('vault/'), findsOneWidget);
+    expect(find.text('Deleted · 1'), findsOneWidget);
+    expect(find.text('New · 2'), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.text('old/')).dy,
+      lessThan(tester.getTopLeft(find.text('vault/')).dy),
+    );
+  });
+
+  testWidgets('each device has its own list, and nothing is mixed between',
+      (tester) async {
+    final preview = SyncPreview(
+      files: [
+        FilePreview(
+          item: item('to-pc.md', MergeKind.pushToRemote),
+          kind: PreviewKind.create,
+          side: PreviewSide.there,
+        ),
+        FilePreview(
+          item: item('to-here.md', MergeKind.pullToLocal),
+          kind: PreviewKind.update,
+          side: PreviewSide.here,
+          lines: const [DiffLine(DiffOp.insert, 'x')],
+        ),
+      ],
+      folders: const [],
+    );
+
+    await show(tester, preview);
+
+    final here = tester.getTopLeft(find.text('Coming here')).dy;
+    final there = tester.getTopLeft(find.text('Going to Desktop')).dy;
+    expect(here, lessThan(there));
+    // Each file sits under the device it lands on.
+    final toHere = tester.getTopLeft(find.text('to-here.md')).dy;
+    final toPc = tester.getTopLeft(find.text('to-pc.md')).dy;
+    expect(toHere, inExclusiveRange(here, there));
+    expect(toPc, greaterThan(there));
+  });
+
+  testWidgets('a device lists what goes, then what changes, then what is new',
+      (tester) async {
+    final preview = SyncPreview(
+      files: [
+        FilePreview(
+          item: item('b-new.md', MergeKind.pullToLocal),
+          kind: PreviewKind.create,
+          side: PreviewSide.here,
+        ),
+        FilePreview(
+          item: item('c-changed.md', MergeKind.pullToLocal),
+          kind: PreviewKind.update,
+          side: PreviewSide.here,
+        ),
+        FilePreview(
+          item: item('d-gone.md', MergeKind.pullToLocal),
+          kind: PreviewKind.delete,
+          side: PreviewSide.here,
+        ),
+      ],
+      folders: const [],
+    );
+
+    await show(tester, preview);
+
+    double y(String text) => tester.getTopLeft(find.text(text)).dy;
+    expect(y('d-gone.md'), lessThan(y('c-changed.md')));
+    expect(y('c-changed.md'), lessThan(y('b-new.md')));
+  });
+
+  testWidgets('a file going away and a file arriving are coloured panels',
+      (tester) async {
+    final preview = SyncPreview(
+      files: [
+        FilePreview(
+          item: item('gone.md', MergeKind.pullToLocal),
+          kind: PreviewKind.delete,
+          side: PreviewSide.here,
+        ),
+        FilePreview(
+          item: item('new.md', MergeKind.pullToLocal),
+          kind: PreviewKind.create,
+          side: PreviewSide.here,
+        ),
+      ],
+      folders: const [],
+    );
+
+    await show(tester, preview);
+
+    // The header strip the name sits on, not only the name.
+    Color strip(String path) => tester
+        .widget<Material>(find
+            .ancestor(of: find.text(path), matching: find.byType(Material))
+            .first)
+        .color!;
+    final red = strip('gone.md');
+    final green = strip('new.md');
+    expect(red.r, greaterThan(red.g));
+    expect(green.g, greaterThan(green.r));
+  });
+
+  testWidgets('a device list folds away, and its counts stay in sight',
+      (tester) async {
+    final preview = SyncPreview(
+      files: [
+        FilePreview(
+          item: item('arriving.md', MergeKind.pullToLocal),
+          kind: PreviewKind.create,
+          side: PreviewSide.here,
+        ),
+      ],
+      folders: const [],
+    );
+
+    await show(tester, preview);
+    expect(find.text('arriving.md'), findsOneWidget);
+
+    await tester.tap(find.text('Coming here'));
+    await tester.pumpAndSettle();
+    expect(find.text('arriving.md'), findsNothing);
+    expect(find.text('+1'), findsOneWidget);
+
+    // And the device nothing happens to says so rather than being left out.
+    expect(find.text('Nothing changes'), findsOneWidget);
+  });
+
+  testWidgets('a merge is shown on both devices, each against its own copy',
+      (tester) async {
+    final merged = merge3(['a'], ['a', 'ours'], ['theirs', 'a']);
+    final mergedItem = item('note.md', MergeKind.conflict);
+    final preview = SyncPreview(
+      files: [
+        FilePreview(
+          item: mergedItem,
+          kind: PreviewKind.merged,
+          side: PreviewSide.both,
+          conflict: MergedConflict(
+            item: mergedItem,
+            merge: merged,
+            ourLines: const ['a', 'ours'],
+            theirLines: const ['theirs', 'a'],
+          ),
+          lines: diffLines(['a', 'ours'], merged.clean!),
+        ),
+      ],
+      folders: const [],
+    );
+
+    await show(tester, preview);
+    expect(find.text('note.md'), findsNWidgets(2));
+
+    await tester.tap(find.text('note.md').first);
+    await tester.tap(find.text('note.md').last);
+    await tester.pumpAndSettle();
+
+    // Here gains their line; the other device gains ours.
+    expect(find.text('+ theirs'), findsOneWidget);
+    expect(find.text('+ ours'), findsOneWidget);
+  });
+
+  testWidgets('the tree shows the folder as it will be, changes marked',
+      (tester) async {
+    final preview = SyncPreview(
+      files: [
+        FilePreview(
+          item: item('daily/new.md', MergeKind.pullToLocal),
+          kind: PreviewKind.create,
+          side: PreviewSide.here,
+        ),
+        FilePreview(
+          item: item('daily/gone.md', MergeKind.pushToRemote),
+          kind: PreviewKind.delete,
+          side: PreviewSide.there,
+        ),
+      ],
+      folders: const [],
+      unchanged: const ['daily/old.md', 'archive/2025.md', 'readme.md'],
+    );
+
+    await show(tester, preview);
+    await tester.tap(find.text('Tree'));
+    await tester.pumpAndSettle();
+
+    // A folder with changes in it is open; one without starts closed.
+    expect(find.text('daily'), findsOneWidget);
+    expect(find.text('new.md'), findsOneWidget);
+    expect(find.text('old.md'), findsOneWidget);
+    expect(find.text('archive'), findsOneWidget);
+    expect(find.text('2025.md'), findsNothing);
+    expect(find.text('readme.md'), findsOneWidget);
+
+    // What goes is still shown, struck through, and says where it goes from.
+    final gone = tester.widget<Text>(find.text('gone.md'));
+    expect(gone.style?.decoration, TextDecoration.lineThrough);
+    expect(find.text('Desktop'), findsOneWidget);
+    expect(find.text('here'), findsOneWidget);
+
+    await tester.tap(find.text('archive'));
+    await tester.pumpAndSettle();
+    expect(find.text('2025.md'), findsOneWidget);
   });
 
   testWidgets('a clean merge carries the combined text, for both sides',
@@ -357,12 +560,12 @@ void main() {
     await tester.tap(find.text('note.md'));
     await tester.pumpAndSettle();
 
-    // Both files have a line 1 and, after the swap, a line 3.
-    expect(find.text('1'), findsNWidgets(2));
-    expect(find.text('3'), findsNWidgets(2));
-    // The removed line is line 2 of the old file only; the added one is line 2
-    // of the new file only. Neither exists on the other side, so each shows a
-    // single number rather than being invented a place it never had.
+    // One column of numbers: a removed line carries its number in the old
+    // file, every other line its number in the new one.
+    expect(find.text('1'), findsOneWidget);
+    expect(find.text('3'), findsOneWidget);
+    // The removed line was line 2 of the old file; the line replacing it is
+    // line 2 of the new one.
     expect(find.text('2'), findsNWidgets(2));
     expect(find.text('− two'), findsOneWidget);
     expect(find.text('+ zwei'), findsOneWidget);
@@ -486,7 +689,8 @@ void main() {
     );
 
     await show(tester, preview);
-    await tester.tap(find.text('note.md'));
+    // It lands on both devices, so it is under both; either one says it.
+    await tester.tap(find.text('note.md').first);
     await tester.pumpAndSettle();
 
     expect(find.textContaining('no copy from a previous sync'), findsOneWidget);

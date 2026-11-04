@@ -74,10 +74,18 @@ class FolderPreview {
 /// Everything a sync is about to do, ready to be shown before anything is
 /// written.
 class SyncPreview {
-  const SyncPreview({required this.files, required this.folders});
+  const SyncPreview({
+    required this.files,
+    required this.folders,
+    this.unchanged = const [],
+  });
 
   final List<FilePreview> files;
   final List<FolderPreview> folders;
+
+  /// Files the sync leaves as they are, because both devices already agree on
+  /// them. With [files] they make up the whole folder as it will be afterwards.
+  final List<String> unchanged;
 
   bool get isEmpty => files.isEmpty;
   Iterable<FilePreview> get conflicts =>
@@ -116,7 +124,11 @@ Future<SyncPreview> buildPreview(
   }
 
   onProgress?.call(SyncProgress(SyncPhase.reading, done: total, total: total));
-  return SyncPreview(files: files, folders: _folders(files, localRoot));
+  return SyncPreview(
+    files: files,
+    folders: _folders(files, localRoot),
+    unchanged: merge.unchanged,
+  );
 }
 
 Future<FilePreview> _oneWay(

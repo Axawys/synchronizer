@@ -48,7 +48,7 @@ void main() {
 
     expect(ru.pairedWith('Pixel'), contains('Pixel'));
     expect(ru.reviewFolder('Obsidian'), contains('Obsidian'));
-    expect(ru.goingThereSection('Pixel', 3), allOf(contains('Pixel'), contains('3')));
+    expect(ru.goingTo('Pixel'), contains('Pixel'));
     expect(ru.versionLabel('1.2'), contains('1.2'));
   });
 
@@ -225,7 +225,6 @@ final Map<String, String Function(AppLocalizations)> _plainStrings = {
   'deletionsWarningBody': (l) => l.deletionsWarningBody,
   'nothingWrittenYet': (l) => l.nothingWrittenYet,
   'conflictsSubtitle': (l) => l.conflictsSubtitle,
-  'mergedSubtitle': (l) => l.mergedSubtitle,
   'keepMine': (l) => l.keepMine,
   'takeMine': (l) => l.takeMine,
   'takeTheirs': (l) => l.takeTheirs,
@@ -238,15 +237,18 @@ final Map<String, String Function(AppLocalizations)> _plainStrings = {
   'cannotBeCompared': (l) => l.cannotBeCompared,
   'noLinePreview': (l) => l.noLinePreview,
   'guessedBaseNote': (l) => l.guessedBaseNote,
-  'kindNewFile': (l) => l.kindNewFile,
-  'kindUpdated': (l) => l.kindUpdated,
-  'kindDeleted': (l) => l.kindDeleted,
   'kindMerged': (l) => l.kindMerged,
+  'comingHere': (l) => l.comingHere,
+  'groupDeleted': (l) => l.groupDeleted,
+  'groupChanged': (l) => l.groupChanged,
+  'groupNew': (l) => l.groupNew,
+  'nothingForDevice': (l) => l.nothingForDevice,
+  'reviewModeChanges': (l) => l.reviewModeChanges,
+  'reviewModeTree': (l) => l.reviewModeTree,
+  'treeCaption': (l) => l.treeCaption,
+  'treeEmpty': (l) => l.treeEmpty,
+  'treeToHere': (l) => l.treeToHere,
   'kindConflict': (l) => l.kindConflict,
-  'folderCreatedHere': (l) => l.folderCreatedHere,
-  'folderCreatedThere': (l) => l.folderCreatedThere,
-  'folderRemovedHere': (l) => l.folderRemovedHere,
-  'folderRemovedThere': (l) => l.folderRemovedThere,
   'historyTitle': (l) => l.historyTitle,
   'clearHistory': (l) => l.clearHistory,
   'nothingSyncedYet': (l) => l.nothingSyncedYet,

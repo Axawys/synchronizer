@@ -36,9 +36,14 @@ class MergeItem {
 /// The outcome of a three-way comparison: every file that differs between the
 /// two devices, each classified as a one-way change or a conflict.
 class MergeResult {
-  MergeResult(this.items, {this.skipped = const []});
+  MergeResult(this.items, {this.skipped = const [], this.unchanged = const []});
 
   final List<MergeItem> items;
+
+  /// Files both devices already hold in the same form, which the sync leaves
+  /// alone. Not needed to reconcile anything; it is the rest of the folder,
+  /// which a picture of what the folder will look like afterwards needs.
+  final List<String> unchanged;
 
   /// Files on either device that this sync leaves alone because Windows could
   /// not hold their names (see [windowsUnsafePaths]). Not part of [items]:
@@ -94,7 +99,8 @@ MergeResult threeWayMerge(
               remote.entries.containsKey(path))
           .toList()
         ..sort();
-      return MergeResult(merge.items, skipped: skipped);
+      return MergeResult(merge.items,
+          skipped: skipped, unchanged: merge.unchanged);
     }
   }
 
@@ -105,12 +111,17 @@ MergeResult threeWayMerge(
   };
 
   final items = <MergeItem>[];
+  final unchanged = <String>[];
   for (final path in paths) {
     final b = base.entries[path];
     final l = local.entries[path];
     final r = remote.entries[path];
 
-    if (l?.hash == r?.hash) continue; // already in sync (or both absent)
+    if (l?.hash == r?.hash) {
+      // Already in sync (or both absent).
+      if (l != null) unchanged.add(path);
+      continue;
+    }
 
     final localChanged = l?.hash != b?.hash;
     final remoteChanged = r?.hash != b?.hash;
@@ -128,5 +139,6 @@ MergeResult threeWayMerge(
   }
 
   items.sort((a, b) => a.path.compareTo(b.path));
-  return MergeResult(items);
+  unchanged.sort();
+  return MergeResult(items, unchanged: unchanged);
 }

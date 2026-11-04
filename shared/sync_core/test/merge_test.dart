@@ -22,6 +22,16 @@ void main() {
     expect(result.isEmpty, isTrue);
   });
 
+  test('what both sides already agree on is named, and nothing else', () {
+    final result = threeWayMerge(
+      m({'a': '1', 'b': '1'}),
+      m({'b': '1', 'a': '1', 'c': '1'}),
+      m({'a': '1', 'b': '2'}),
+    );
+    // The rest of the folder, for a picture of how it will look afterwards.
+    expect(result.unchanged, ['a']);
+  });
+
   test('changed on remote only pulls to local', () {
     final base = m({'a': '1'});
     final local = m({'a': '1'});
